@@ -77,6 +77,33 @@ def _looks_like_team(line: str) -> bool:
     if re.fullmatch(r'[\d\s.,+\-]+',line): return False
     return bool(re.search(r'[A-Za-zÀ-ÿ]{2,}',line))
 
+
+def _fmt_line(value):
+    value = round(float(value), 3)
+    if value.is_integer():
+        return f"{value:.1f}"
+    return f"{value:.2f}".rstrip('0').rstrip('.')
+
+def _standardize_selection(text):
+    """Mais de 15.5 -> Over 15.5; Menos de 2.5,3.0 -> Under 2.75."""
+    if not text:
+        return text
+    low=text.lower()
+    if re.search(r'\bmais de\b|\bover\b',low):
+        side='Over'
+    elif re.search(r'\bmenos de\b|\bunder\b',low):
+        side='Under'
+    else:
+        return text
+
+    m=re.search(r'(?:mais de|menos de|over|under)\s+(\d+(?:[.,]\d+)?)(?:\s*[,;/]\s*(\d+(?:[.,]\d+)?))?',text,re.I)
+    if not m:
+        return text
+    first=float(m.group(1).replace(',','.'))
+    second=float(m.group(2).replace(',','.')) if m.group(2) else None
+    line=(first+second)/2 if second is not None else first
+    return f"{side} {_fmt_line(line)}"
+
 def parse_text(text: str) -> dict:
     raw_lines=[_clean_line(x) for x in text.splitlines()]
     lines=[x for x in raw_lines if x]
@@ -167,6 +194,14 @@ def parse_text(text: str) -> dict:
 
     # Normaliza seleção em português se OCR captou "Menos de"
     selection=re.sub(r'\s+',' ',selection).strip()
+
+    # Usa primeiro a linha original do OCR para preservar linhas asiáticas divididas (ex.: 2.5,3.0).
+    standardized_source = selection
+    for _line in lines:
+        if re.search(r'\b(?:mais de|menos de|over|under)\b', _line, re.I):
+            standardized_source = _line
+            break
+    selection=_standardize_selection(standardized_source)
 
     return {
         'user_name':'',
