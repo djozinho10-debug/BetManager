@@ -379,17 +379,127 @@ elif page == 'Liquidação':
                     st.rerun()
 
 elif page == 'Relatórios':
-    df=data_for_view(); stats=kpis(df); scope='Todos os apostadores' if selected_view=='TODOS' else selected_view
-    st.subheader(f'Relatórios — {scope}')
-    c1,c2,c3,c4,c5=st.columns(5)
-    c1.metric('Lucro',f"{stats['profit_units']:+.2f}u"); c2.metric('ROI / Yield',f"{stats['roi']:.2f}%"); c3.metric('Acerto',f"{stats['hit_rate']:.1f}%"); c4.metric('Odd média',f"{stats['avg_odds']:.2f}"); c5.metric('Drawdown',f"{stats['drawdown']:.2f}u")
-    labels={'user_name':'Apostador','market':'Mercado','competition':'Campeonato','bookmaker':'Casa','bet_type':'Tipo','timing':'Pré/Live','month':'Mês','odd_band':'Faixa de odd'}
-    fields=list(labels); fields.remove('user_name') if selected_view!='TODOS' else None
-    field=st.selectbox('Analisar por',fields,format_func=lambda x:labels[x]); report=group_report(df,field)
-    if report.empty: st.info('Sem apostas encerradas suficientes.')
+    st.subheader('Relatórios Pro')
+    df=data_for_view()
+    d=prepare(df)
+
+    if d.empty:
+        st.info('Sem dados para analisar.')
     else:
-        st.dataframe(report,hide_index=True,use_container_width=True)
-        st.plotly_chart(px.bar(report.head(15),x=field,y='lucro_u',title=f"Lucro (u) por {labels[field]}"),use_container_width=True)
+        st.caption('Cruze período, apostador, campeonato, mercado, casa, faixa de odd, momento e resultado.')
+
+        # Filtros
+        f1,f2,f3,f4=st.columns(4)
+        dates=pd.to_datetime(d['bet_date'],errors='coerce').dt.date
+        min_date=dates.min()
+        max_date=dates.max()
+        period=f1.date_input('Período',value=(min_date,max_date),min_value=min_date,max_value=max_date)
+        users=f2.multiselect('Apostador',sorted(d['user_name'].dropna().astype(str).unique().tolist()))
+        markets=f3.multiselect('Mercado',sorted(d['market'].dropna().astype(str).unique().tolist()))
+        comps=f4.multiselect('Campeonato',sorted(d['competition'].dropna().astype(str).unique().tolist()))
+
+        f1,f2,f3,f4=st.columns(4)
+        books=f1.multiselect('Casa',sorted(d['bookmaker'].dropna().astype(str).unique().tolist()))
+        oddbands=f2.multiselect('Faixa de odd',sorted(d['odd_band'].dropna().astype(str).unique().tolist()))
+        timings=f3.multiselect('Momento',sorted(d['timing'].dropna().astype(str).unique().tolist()))
+        results=f4.multiselect('Resultado',sorted(d['result'].dropna().astype(str).unique().tolist()))
+
+        view=d.copy()
+        if isinstance(period,(list,tuple)) and len(period)==2:
+            vd=pd.to_datetime(view['bet_date'],errors='coerce').dt.date
+            view=view[(vd>=period[0])&(vd<=period[1])]
+        if users: view=view[view['user_name'].isin(users)]
+        if markets: view=view[view['market'].isin(markets)]
+        if comps: view=view[view['competition'].isin(comps)]
+        if books: view=view[view['bookmaker'].isin(books)]
+        if oddbands: view=view[view['odd_band'].isin(oddbands)]
+        if timings: view=view[view['timing'].isin(timings)]
+        if results: view=view[view['result'].isin(results)]
+
+        settled=view[view['result'].isin(['WIN','HALF WIN','VOID','HALF LOSS','LOSS'])].copy()
+        units=float(settled['units'].sum()) if not settled.empty else 0
+        profit=float(settled['profit_units'].sum()) if not settled.empty else 0
+        roi=(profit/units*100) if units else 0
+        wins=float(settled['result'].map({'WIN':1,'HALF WIN':.5,'VOID':0,'HALF LOSS':0,'LOSS':0}).fillna(0).sum()) if not settled.empty else 0
+        hit=(wins/len(settled)*100) if len(settled) else 0
+        avg=float(settled['odds'].mean()) if not settled.empty else 0
+
+        k1,k2,k3,k4,k5,k6=st.columns(6)
+        k1.metric('Lucro',f'{profit:+.2f}u')
+        k2.metric('ROI',f'{roi:.2f}%')
+        k3.metric('Apostas',len(view))
+        k4.metric('Liquidadas',len(settled))
+        k5.metric('Acerto',f'{hit:.1f}%')
+        k6.metric('Odd média',f'{avg:.2f}')
+
+        st.markdown('### Evolução do recorte')
+        if not settled.empty:
+            ev=settled.sort_values(['bet_date','id']).copy()
+            ev['lucro_acumulado_u']=ev['profit_units'].cumsum()
+            st.plotly_chart(px.line(ev,x='bet_date',y='lucro_acumulado_u',markers=True,title='Lucro acumulado do filtro'),use_container_width=True)
+
+        c1,c2=st.columns(2)
+        with c1:
+            st.markdown('### Mercados')
+            rr=group_report(view,'market')
+            if not rr.empty:
+                st.dataframe(rr[['market','apostas','unidades','lucro_u','roi_%','odd_media']],hide_index=True,use_container_width=True)
+        with c2:
+            st.markdown('### Campeonatos')
+            rr2=group_report(view,'competition')
+            if not rr2.empty:
+                st.dataframe(rr2[['competition','apostas','unidades','lucro_u','roi_%','odd_media']],hide_index=True,use_container_width=True)
+
+        c1,c2=st.columns(2)
+        with c1:
+            st.markdown('### Casas')
+            rb=group_report(view,'bookmaker')
+            if not rb.empty:
+                st.dataframe(rb[['bookmaker','apostas','lucro_u','roi_%','odd_media']],hide_index=True,use_container_width=True)
+        with c2:
+            st.markdown('### Faixas de odd')
+            ro=group_report(view,'odd_band')
+            if not ro.empty:
+                st.dataframe(ro[['odd_band','apostas','lucro_u','roi_%','odd_media']],hide_index=True,use_container_width=True)
+
+        st.markdown('### Insights do filtro')
+        insights=[]
+        if len(settled):
+            insights.append(f"Resultado do recorte: **{profit:+.2f}u**, com ROI de **{roi:.2f}%** em **{len(settled)}** apostas liquidadas.")
+            if not rr.empty:
+                best=rr.iloc[0]
+                worst=rr.sort_values('lucro_u').iloc[0]
+                insights.append(f"Melhor mercado: **{best['market']}** ({best['lucro_u']:+.2f}u / ROI {best['roi_%']:.2f}%).")
+                if worst['lucro_u']<0:
+                    insights.append(f"Maior perda por mercado: **{worst['market']}** ({worst['lucro_u']:+.2f}u).")
+            if not rr2.empty:
+                bc=rr2.iloc[0]
+                insights.append(f"Melhor campeonato: **{bc['competition']}** ({bc['lucro_u']:+.2f}u / ROI {bc['roi_%']:.2f}%).")
+        for x in insights:
+            st.markdown('• '+x)
+
+        # Calendário diário
+        st.markdown('### Calendário de resultados')
+        if not settled.empty:
+            daily=settled.copy()
+            daily['dia']=pd.to_datetime(daily['bet_date'],errors='coerce').dt.date
+            cal=daily.groupby('dia',as_index=False).agg(
+                apostas=('id','count'),
+                unidades=('units','sum'),
+                lucro_u=('profit_units','sum')
+            )
+            cal['roi_%']=(cal['lucro_u']/cal['unidades']*100).round(2)
+            cal['lucro_u']=cal['lucro_u'].round(2)
+            cal['unidades']=cal['unidades'].round(2)
+            cal=cal.sort_values('dia',ascending=False)
+            st.dataframe(cal,hide_index=True,use_container_width=True)
+
+            selected_day=st.selectbox('Abrir apostas do dia',cal['dia'].tolist())
+            daybets=daily[daily['dia']==selected_day]
+            st.dataframe(
+                daybets[['bet_date','user_name','event','market','selection','odds','result','profit_units']],
+                hide_index=True,use_container_width=True
+            )
 
 elif page == 'Exportar':
     df=data_for_view(); scope='todos' if selected_view=='TODOS' else selected_view
