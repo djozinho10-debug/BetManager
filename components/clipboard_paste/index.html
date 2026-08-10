@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html,body{margin:0;padding:0;background:transparent;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+#box{border:2px dashed #687386;border-radius:12px;padding:22px;text-align:center;min-height:72px;outline:none;cursor:pointer}
+#box:focus{border-style:solid;border-color:#2d8cff}
+.small{font-size:13px;opacity:.72;margin-top:6px}.status{font-size:13px;font-weight:700;margin-top:9px}
+</style>
+</head>
+<body>
+<div id="box" tabindex="0">📋 Clique aqui e pressione <b>Ctrl+V</b>
+<div class="small">O print será lido automaticamente e a ficha abrirá para conferência.</div>
+<div id="status" class="status"></div></div>
+<script>
+const box=document.getElementById("box"), status=document.getElementById("status");
+function post(type, extra={}) {
+  window.parent.postMessage(Object.assign({isStreamlitMessage:true,type:type},extra),"*");
+}
+function height(){post("streamlit:setFrameHeight",{height:document.body.scrollHeight+8});}
+function ready(){post("streamlit:componentReady",{apiVersion:1}); height();}
+function value(v){post("streamlit:setComponentValue",{value:v,dataType:"json"});}
+function focusBox(){box.focus();}
+function pasted(e){
+  const items=(e.clipboardData||window.clipboardData)?.items||[];
+  for(const item of items){
+    if(item.type && item.type.startsWith("image/")){
+      e.preventDefault();
+      const file=item.getAsFile(), reader=new FileReader();
+      reader.onload=()=>{
+        status.textContent="✓ Print recebido — abrindo ficha…";
+        value({data_url:reader.result,mime:file.type||"image/png",name:file.name||"clipboard.png",ts:Date.now()});
+        height();
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+  }
+  status.textContent="Nenhuma imagem encontrada na área de transferência.";
+  height();
+}
+box.addEventListener("paste",pasted);
+document.addEventListener("paste",pasted);
+box.addEventListener("click",focusBox);
+window.addEventListener("message",(e)=>{
+  if(e.data && e.data.type==="streamlit:render"){height();}
+});
+ready();
+setTimeout(focusBox,100);
+</script>
+</body>
+</html>
