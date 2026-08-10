@@ -23,3 +23,11 @@ Fluxo principal: **Ctrl+V do print → OCR automático → ficha editável → S
 6. Confira/corrija os dados e clique em **Salvar aposta**.
 
 O OCR depende da qualidade e do layout do print, por isso a ficha sempre fica editável antes do salvamento.
+
+
+## API-Football
+No Streamlit Cloud > App settings > Secrets, adicione:
+
+API_FOOTBALL_KEY = "SUA_CHAVE"
+
+O sistema usa o OCR primeiro. Se conseguir identificar os dois times, consulta a API-Football para confirmar o jogo, normalizar os nomes e preencher o campeonato automaticamente.

@@ -104,6 +104,29 @@ def _standardize_selection(text):
     line=(first+second)/2 if second is not None else first
     return f"{side} {_fmt_line(line)}"
 
+
+def _clean_team_token(name):
+    """Limpa resíduos OCR sem destruir nomes válidos de clubes."""
+    if not name:
+        return ''
+    name=_clean_line(name)
+    # Ex.: "44 Banfield" -> "Banfield"; "É Belgrano" -> "Belgrano".
+    name=re.sub(r'^\d{1,4}\s+(?=[A-Za-zÀ-ÿ])','',name).strip()
+    name=re.sub(r'^[A-Za-zÀ-ÿ]\s+(?=[A-Za-zÀ-ÿ]{2,})','',name).strip()
+    name=re.sub(r'\s+',' ',name).strip(' -|,.;:')
+    return name
+
+def _clean_event_name(event):
+    if not event:
+        return event
+    parts=re.split(r'\s+x\s+',event,flags=re.I)
+    if len(parts)==2:
+        home=_clean_team_token(parts[0])
+        away=_clean_team_token(parts[1])
+        if home and away:
+            return f"{home} x {away}"
+    return _clean_team_token(event)
+
 def parse_text(text: str) -> dict:
     raw_lines=[_clean_line(x) for x in text.splitlines()]
     lines=[x for x in raw_lines if x]
@@ -202,6 +225,7 @@ def parse_text(text: str) -> dict:
             standardized_source = _line
             break
     selection=_standardize_selection(standardized_source)
+    event=_clean_event_name(event)
 
     return {
         'user_name':'',

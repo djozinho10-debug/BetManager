@@ -10,6 +10,7 @@ from PIL import Image
 from src.clipboard_component import clipboard_image_paste
 from src.db import add_bet, database_mode, database_source, delete_bet, get_bets, get_users, init_db, update_result, update_bet
 from src.parser import image_to_text, parse_text
+from src.api_football import api_enabled, enrich_from_api
 from src.reports import group_report, kpis, prepare
 
 st.set_page_config(page_title='BetManager Cloud', page_icon='📊', layout='wide')
@@ -48,6 +49,20 @@ def data_for_view():
 def image_from_data_url(data_url: str):
     raw = data_url.split(',', 1)[1]
     return Image.open(io.BytesIO(base64.b64decode(raw))).convert('RGB')
+
+
+BOOKMAKER_OPTIONS = ['Betano','Bet365','Bolsa','Pinnacle','Outra']
+
+def bookmaker_index(value):
+    value=(value or '').strip().lower()
+    aliases={
+        'betano':'Betano','bet365':'Bet365','bet 365':'Bet365',
+        'bolsa':'Bolsa','betfair':'Bolsa','exchange':'Bolsa',
+        'pinnacle':'Pinnacle','pinacle':'Pinnacle'
+    }
+    normalized=aliases.get(value,'Outra')
+    return BOOKMAKER_OPTIONS.index(normalized)
+
 
 
 if page == 'Dashboard':
@@ -113,6 +128,8 @@ elif page == 'Importar aposta':
                 ocr_text = image_to_text(image)
                 parsed = parse_text(ocr_text)
                 parsed['user_name'] = st.session_state.user_name
+                if api_enabled():
+                    parsed = enrich_from_api(parsed)
                 st.session_state.ocr_text = ocr_text
                 st.session_state.parsed_bet = parsed
                 st.session_state.last_image_token = image_token
@@ -143,11 +160,16 @@ elif page == 'Importar aposta':
         with right:
             st.markdown('#### Confira e ajuste')
             st.caption('Tudo abaixo pode ser corrigido antes de salvar.')
+            if p.get('_api_status'):
+                if p.get('_api_fixture_id'):
+                    st.success(f"⚽ {p.get('_api_status')} • campeonato preenchido automaticamente.")
+                else:
+                    st.caption(f"API-Football: {p.get('_api_status')}")
             with st.form('bet_form', clear_on_submit=False):
                 a,b,c=st.columns(3)
                 bettor=a.text_input('Apostador', value=st.session_state.user_name)
                 bet_date=b.date_input('Data', value=pd.to_datetime(p.get('bet_date')).date() if p.get('bet_date') else date.today())
-                bookmaker=c.text_input('Casa', value=p.get('bookmaker',''))
+                bookmaker=c.selectbox('Casa', BOOKMAKER_OPTIONS, index=bookmaker_index(p.get('bookmaker','')))
                 competition=st.text_input('Campeonato', value=p.get('competition',''))
                 event=st.text_input('Evento / jogo', value=p.get('event',''))
                 a,b=st.columns(2)
@@ -211,7 +233,7 @@ elif page == 'Apostas':
             with st.expander('✏️ Editar aposta selecionada'):
                 with st.form('edit_bet'):
                     e1,e2,e3=st.columns(3)
-                    eu=e1.text_input('Apostador',str(row.user_name)); ed=e2.date_input('Data',pd.to_datetime(row.bet_date).date()); eb=e3.text_input('Casa',str(row.bookmaker or ''))
+                    eu=e1.text_input('Apostador',str(row.user_name)); ed=e2.date_input('Data',pd.to_datetime(row.bet_date).date()); eb=e3.selectbox('Casa',BOOKMAKER_OPTIONS,index=bookmaker_index(str(row.bookmaker or '')))
                     ec=st.text_input('Campeonato',str(row.competition or '')); ee=st.text_input('Evento',str(row.event))
                     e1,e2=st.columns(2); em=e1.text_input('Mercado',str(row.market or '')); es=e2.text_input('Seleção',str(row.selection or ''))
                     e1,e2,e3,e4=st.columns(4)
