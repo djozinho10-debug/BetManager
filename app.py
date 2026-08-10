@@ -66,44 +66,103 @@ def bookmaker_index(value):
 
 
 if page == 'Dashboard':
-    df = data_for_view(); stats = kpis(df)
+    df = data_for_view()
+    stats = kpis(df)
     scope = 'Todos os apostadores' if selected_view == 'TODOS' else selected_view
     st.subheader(f'Dashboard — {scope}')
-    cols = st.columns(8)
-    cols[0].metric('Apostas', stats['bets'])
-    cols[1].metric('Unidades apostadas', f"{stats['units']:.2f}u")
-    cols[2].metric('Lucro', f"{stats['profit_units']:+.2f}u")
-    cols[3].metric('ROI / Yield', f"{stats['roi']:.2f}%")
-    cols[4].metric('Acerto', f"{stats['hit_rate']:.1f}%")
-    cols[5].metric('Odd média', f"{stats['avg_odds']:.2f}")
-    cols[6].metric('Drawdown máx.', f"{stats['drawdown']:.2f}u")
-    cols[7].metric('Pendentes', int((df['result']=='PENDENTE').sum()) if not df.empty else 0)
-    d = prepare(df)
-    if not d.empty:
-        settled = d[d['result'].isin(['WIN','HALF WIN','HALF LOSS','LOSS'])].sort_values(['bet_date','id'])
-        if not settled.empty:
-            settled['lucro_acumulado_u'] = settled['profit_units'].cumsum()
-            st.plotly_chart(px.line(settled,x='bet_date',y='lucro_acumulado_u',markers=True,title='Evolução do lucro acumulado (u)'),use_container_width=True)
-            c1,c2 = st.columns(2)
-            with c1:
-                st.subheader('Mercados')
-                r = group_report(df, 'market')
-                if not r.empty:
-                    st.dataframe(r.head(10), hide_index=True, use_container_width=True)
 
-            with c2:
-                st.subheader('Campeonatos')
-                r = group_report(df, 'competition')
-                if not r.empty:
-                    st.dataframe(r.head(10), hide_index=True, use_container_width=True)
-            if selected_view == 'TODOS':
-                r=group_report(df,'user_name')
-                if not r.empty:
-                    st.subheader('Desempenho por apostador'); st.dataframe(r,hide_index=True,use_container_width=True)
-        else:
-            st.info('Marque apostas como WIN, HALF WIN, HALF LOSS ou LOSS para liberar os indicadores de performance.')
-    else:
+    k1,k2,k3,k4,k5,k6 = st.columns(6)
+    k1.metric('Lucro', f"{stats['profit_units']:+.2f}u")
+    k2.metric('ROI / Yield', f"{stats['roi']:.2f}%")
+    k3.metric('Apostas', stats['bets'])
+    k4.metric('Unidades apostadas', f"{stats['units']:.2f}u")
+    k5.metric('Taxa de acerto', f"{stats['hit_rate']:.1f}%")
+    k6.metric('Odd média', f"{stats['avg_odds']:.2f}")
+
+    k1,k2,k3,k4 = st.columns(4)
+    k1.metric('Drawdown máx.', f"{stats['drawdown']:.2f}u")
+    k2.metric('Pendentes', stats.get('pending', int((df['result']=='PENDENTE').sum()) if not df.empty else 0))
+    k3.metric('Melhor sequência', str(stats.get('best_streak',0)))
+    k4.metric('Pior sequência', str(stats.get('worst_streak',0)))
+
+    d = prepare(df)
+    if d.empty:
         st.info('Ainda não há apostas cadastradas.')
+    else:
+        settled = d[d['result'].isin(['WIN','HALF WIN','VOID','HALF LOSS','LOSS'])].copy().sort_values(['bet_date','id'])
+
+        st.markdown('### Evolução')
+        c1,c2 = st.columns([1.7,1])
+        with c1:
+            if not settled.empty:
+                settled['lucro_acumulado_u'] = settled['profit_units'].cumsum()
+                st.plotly_chart(px.line(settled,x='bet_date',y='lucro_acumulado_u',markers=True,title='Lucro acumulado (u)'),use_container_width=True)
+            else:
+                st.info('Sem apostas liquidadas para montar a curva de lucro.')
+        with c2:
+            if not settled.empty:
+                result_order=['WIN','HALF WIN','VOID','HALF LOSS','LOSS']
+                rc=settled['result'].value_counts().reindex(result_order,fill_value=0).reset_index()
+                rc.columns=['Resultado','Quantidade']
+                st.plotly_chart(px.bar(rc,x='Resultado',y='Quantidade',title='Distribuição de resultados'),use_container_width=True)
+
+        st.markdown('### Onde está o resultado')
+        c1,c2 = st.columns(2)
+        with c1:
+            mr = group_report(df,'market')
+            st.markdown('#### Mercados')
+            if not mr.empty:
+                st.dataframe(mr[['market','apostas','unidades','lucro_u','roi_%','odd_media']].head(8),hide_index=True,use_container_width=True)
+        with c2:
+            cr = group_report(df,'competition')
+            st.markdown('#### Campeonatos')
+            if not cr.empty:
+                st.dataframe(cr[['competition','apostas','unidades','lucro_u','roi_%','odd_media']].head(8),hide_index=True,use_container_width=True)
+
+        c1,c2 = st.columns(2)
+        with c1:
+            orp = group_report(df,'odd_band')
+            st.markdown('#### Faixas de odd')
+            if not orp.empty:
+                st.dataframe(orp[['odd_band','apostas','lucro_u','roi_%','odd_media']].head(8),hide_index=True,use_container_width=True)
+        with c2:
+            tr = group_report(df,'timing')
+            st.markdown('#### Pré-jogo x Ao vivo')
+            if not tr.empty:
+                st.dataframe(tr[['timing','apostas','lucro_u','roi_%','odd_media']],hide_index=True,use_container_width=True)
+
+        st.markdown('### Insights rápidos')
+        insights=[]
+        if not settled.empty:
+            if stats['roi'] > 0:
+                insights.append(f"🟢 ROI geral positivo em **{stats['roi']:.2f}%**.")
+            elif stats['roi'] < 0:
+                insights.append(f"🔴 ROI geral negativo em **{stats['roi']:.2f}%**.")
+            if stats['drawdown'] < 0:
+                insights.append(f"⚠️ Drawdown máximo de **{stats['drawdown']:.2f}u**.")
+            if not mr.empty:
+                best=mr.iloc[0]
+                worst=mr.sort_values('lucro_u').iloc[0]
+                insights.append(f"🔥 Melhor mercado: **{best['market']}** ({best['lucro_u']:+.2f}u | ROI {best['roi_%']:.2f}%).")
+                if worst['lucro_u'] < 0:
+                    insights.append(f"📉 Mercado com maior perda: **{worst['market']}** ({worst['lucro_u']:+.2f}u | ROI {worst['roi_%']:.2f}%).")
+            if not cr.empty:
+                bestc=cr.iloc[0]
+                insights.append(f"🏆 Melhor campeonato: **{bestc['competition']}** ({bestc['lucro_u']:+.2f}u).")
+            pend = int((d['result']=='PENDENTE').sum())
+            if pend:
+                insights.append(f"⏳ Existem **{pend} apostas pendentes** para liquidar.")
+        if insights:
+            for item in insights[:6]:
+                st.markdown(item)
+        else:
+            st.caption('Os insights aparecerão conforme as apostas forem sendo liquidadas.')
+
+        if selected_view == 'TODOS':
+            ur = group_report(df,'user_name')
+            if not ur.empty:
+                st.markdown('### Ranking por apostador')
+                st.dataframe(ur[['user_name','apostas','unidades','lucro_u','roi_%','odd_media']],hide_index=True,use_container_width=True)
 
 elif page == 'Importar aposta':
     st.info(f'Aposta vinculada a **{st.session_state.user_name}**. O valor em R$ do bilhete não é usado no desempenho: o padrão é **1u**.')
