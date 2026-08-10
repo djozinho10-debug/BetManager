@@ -63,7 +63,7 @@ def _num(value: str) -> float:
     except:return 0.0
 
 def _clean_line(line: str) -> str:
-    line=re.sub(r'^[^\wÀ-ÿ0-9+\-]+','',line.strip())
+    line=re.sub(r'^[%º°•·●○◦*|:;,_~^`´"“”!?+=<>#/\\]+','',line.strip())
     line=re.sub(r'\s+',' ',line).strip()
     return line
 
@@ -104,7 +104,12 @@ def parse_text(text: str) -> dict:
     selection=''
     selection_line=''
     for line in lines:
-        m=re.search(r'((?:menos de|mais de|over|under)\s+\d+(?:[.,]\d+)?(?:\s*[,;/\-]?\s*\d+(?:[.,]\d+)?)?)',line,re.I)
+        m=re.search(r"([A-Za-zÀ-ÿ0-9 .'\-]{2,60}?)\s*-\s*((?:menos de|mais de|over|under)\s+\d+(?:[.,]\d+)?)",line,re.I)
+        if m:
+            selection=f"{_clean_line(m.group(1))} - {m.group(2).strip()}"
+            selection_line=line
+            break
+        m=re.search(r'((?:menos de|mais de|over|under)\s+\d+(?:[.,]\d+)?)',line,re.I)
         if m:
             selection=m.group(1).strip()
             selection_line=line
@@ -117,16 +122,21 @@ def parse_text(text: str) -> dict:
 
     # Mercado
     market=''
-    if any(re.search(r'gols?\s*[+\-]',x,re.I) for x in lines) or re.search(r'(menos de|mais de|over|under)\s+\d',clean,re.I):
-        market='Gols +/-'
-    if re.search(r'escanteios|corners',clean,re.I):
+    lowclean=clean.lower()
+    if re.search(r'chutes?\s+no\s+alvo|remates?\s+no\s+alvo|finaliza(?:ç|c)ões?\s+no\s+alvo',lowclean,re.I):
+        market='Time da Casa - Chutes no Alvo' if 'time da casa' in lowclean else ('Time Visitante - Chutes no Alvo' if 'time visitante' in lowclean else 'Chutes no Alvo')
+    elif re.search(r'\bchutes?\b|\bremates?\b|finaliza(?:ç|c)ões?',lowclean,re.I):
+        market='Time da Casa - Chutes' if 'time da casa' in lowclean else ('Time Visitante - Chutes' if 'time visitante' in lowclean else 'Chutes')
+    elif re.search(r'escanteios|corners',lowclean,re.I):
         market='Escanteios'
-    if re.search(r'handicap|\bhc\b',clean,re.I):
+    elif re.search(r'handicap|\bhc\b',lowclean,re.I):
         market='Handicap'
-    if re.search(r'ambas\s+marcam|btts',clean,re.I):
+    elif re.search(r'ambas\s+marcam|btts',lowclean,re.I):
         market='Ambas marcam'
-    if re.search(r'resultado\s+final|moneyline|vencedor',clean,re.I):
+    elif re.search(r'resultado\s+final|moneyline|vencedor',lowclean,re.I):
         market='Resultado final'
+    elif any(re.search(r'gols?\s*[+\-]',x,re.I) for x in lines) or re.search(r'(menos de|mais de|over|under)\s+\d',lowclean,re.I):
+        market='Gols +/-'
 
     # Times: primeiro tenta "A x B"; depois procura duas linhas com cara de nome de equipe.
     event=''
@@ -138,7 +148,7 @@ def parse_text(text: str) -> dict:
         # Em bilhetes como o exemplo, as equipes vêm após a linha de mercado.
         start=0
         for i,line in enumerate(lines):
-            if re.search(r'gols?|escanteios|corners|handicap|resultado',line,re.I):
+            if re.search(r'gols?|chutes?|remates?|finaliza|escanteios|corners|handicap|resultado',line,re.I):
                 start=i+1
         for line in lines[start:]:
             if _looks_like_team(line):
