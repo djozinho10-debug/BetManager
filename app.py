@@ -10,7 +10,7 @@ from PIL import Image
 from src.clipboard_component import clipboard_image_paste
 from src.db import add_bet, database_mode, database_source, delete_bet, get_bets, get_users, init_db, update_result, update_bet
 from src.parser import image_to_text, parse_text
-from src.api_football import api_enabled, enrich_from_api
+from src.api_football import api_enabled, enrich_from_api, suggest_settlement
 from src.reports import group_report, kpis, prepare
 
 st.set_page_config(page_title='BetManager Cloud', page_icon='📊', layout='wide')
@@ -36,7 +36,7 @@ with st.sidebar:
     if st.session_state.user_name not in users:
         users = sorted(users + [st.session_state.user_name])
     selected_view = st.selectbox('Visualizar dados de', ['TODOS'] + users, format_func=lambda x: 'Todos os apostadores' if x == 'TODOS' else x)
-    page = st.radio('Menu', ['Dashboard','Importar aposta','Apostas','Relatórios','Exportar'])
+    page = st.radio('Menu', ['Dashboard','Importar aposta','Apostas','Liquidação','Relatórios','Exportar'])
     st.divider()
     st.caption('Perfil: ADMIN • acesso total')
     st.caption(f'Banco: {database_mode()} • origem: {database_source()}')
@@ -253,6 +253,71 @@ elif page == 'Apostas':
                         st.success('Aposta atualizada.'); st.rerun()
             if st.button('🗑️ Excluir aposta selecionada'):
                 delete_bet(int(bet_id)); st.success('Aposta excluída.'); st.rerun()
+
+elif page == 'Liquidação':
+    st.subheader('Liquidação e pendências')
+    df=data_for_view()
+    pending=df[df['result'].eq('PENDENTE')].copy() if not df.empty else pd.DataFrame()
+
+    if pending.empty:
+        st.success('Não há apostas pendentes neste filtro.')
+    else:
+        st.caption('A API pode sugerir o resultado. Você confirma antes de gravar.')
+        f1,f2,f3=st.columns(3)
+        q=f1.text_input('Buscar jogo',key='liq_q')
+        markets=f2.multiselect('Mercado',sorted([x for x in pending['market'].dropna().unique() if str(x).strip()]),key='liq_market')
+        bettors=f3.multiselect('Apostador',sorted([x for x in pending['user_name'].dropna().unique() if str(x).strip()]),key='liq_user')
+
+        view=pending.copy()
+        if q:
+            view=view[view['event'].fillna('').str.contains(q,case=False,regex=False)]
+        if markets:
+            view=view[view['market'].isin(markets)]
+        if bettors:
+            view=view[view['user_name'].isin(bettors)]
+
+        st.dataframe(
+            view[['id','bet_date','user_name','event','market','selection','odds','units']],
+            hide_index=True,use_container_width=True
+        )
+
+        if not view.empty:
+            bet_id=st.selectbox('Selecione a aposta pendente',view['id'].tolist(),key='liq_bet')
+            row=view[view['id']==bet_id].iloc[0].to_dict()
+
+            c1,c2=st.columns([1,1])
+            with c1:
+                st.markdown(f"**{row['event']}**")
+                st.caption(f"{row.get('market','')} • {row.get('selection','')} • Odd {float(row.get('odds',1)):.2f} • {float(row.get('units',1)):.2f}u")
+                if st.button('🤖 Sugerir resultado pela API',use_container_width=True):
+                    with st.spinner('Consultando resultado e estatísticas...'):
+                        st.session_state['settlement_suggestion']=suggest_settlement(row)
+                        st.session_state['settlement_bet_id']=int(bet_id)
+
+            with c2:
+                sug=st.session_state.get('settlement_suggestion') if st.session_state.get('settlement_bet_id')==int(bet_id) else None
+                if sug:
+                    if sug.get('suggestion'):
+                        st.success(f"Sugestão: **{sug['suggestion']}**")
+                        if sug.get('detail'):
+                            st.caption(sug['detail'])
+                    else:
+                        st.warning(sug.get('status','Não foi possível sugerir.'))
+
+            options=['WIN','HALF WIN','VOID','HALF LOSS','LOSS','PENDENTE']
+            default='PENDENTE'
+            if sug and sug.get('suggestion') in options:
+                default=sug['suggestion']
+            chosen=st.selectbox('Resultado a confirmar',options,index=options.index(default),key=f'liq_result_{bet_id}')
+            if st.button('✅ Confirmar liquidação',type='primary',use_container_width=True):
+                if chosen=='PENDENTE':
+                    st.warning('Escolha um resultado antes de confirmar.')
+                else:
+                    update_result(int(bet_id),chosen)
+                    st.success(f'Aposta #{bet_id} liquidada como {chosen}.')
+                    st.session_state.pop('settlement_suggestion',None)
+                    st.session_state.pop('settlement_bet_id',None)
+                    st.rerun()
 
 elif page == 'Relatórios':
     df=data_for_view(); stats=kpis(df); scope='Todos os apostadores' if selected_view=='TODOS' else selected_view
