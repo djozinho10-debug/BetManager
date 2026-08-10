@@ -86,9 +86,16 @@ if page == 'Dashboard':
             st.plotly_chart(px.line(settled,x='bet_date',y='lucro_acumulado_u',markers=True,title='Evolução do lucro acumulado (u)'),use_container_width=True)
             c1,c2 = st.columns(2)
             with c1:
-                r=group_report(df,'market'); st.subheader('Mercados'); st.dataframe(r.head(10),hide_index=True,use_container_width=True) if not r.empty else None
+                st.subheader('Mercados')
+                r = group_report(df, 'market')
+                if not r.empty:
+                    st.dataframe(r.head(10), hide_index=True, use_container_width=True)
+
             with c2:
-                r=group_report(df,'competition'); st.subheader('Campeonatos'); st.dataframe(r.head(10),hide_index=True,use_container_width=True) if not r.empty else None
+                st.subheader('Campeonatos')
+                r = group_report(df, 'competition')
+                if not r.empty:
+                    st.dataframe(r.head(10), hide_index=True, use_container_width=True)
             if selected_view == 'TODOS':
                 r=group_report(df,'user_name')
                 if not r.empty:
