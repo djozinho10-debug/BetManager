@@ -8,7 +8,7 @@ import streamlit as st
 from PIL import Image
 
 from src.clipboard_component import clipboard_image_paste
-from src.db import add_bet, database_mode, delete_bet, get_bets, get_users, init_db, update_result, update_bet
+from src.db import add_bet, database_mode, database_source, delete_bet, get_bets, get_users, init_db, update_result, update_bet
 from src.parser import image_to_text, parse_text
 from src.reports import group_report, kpis, prepare
 
@@ -38,7 +38,7 @@ with st.sidebar:
     page = st.radio('Menu', ['Dashboard','Importar aposta','Apostas','Relatórios','Exportar'])
     st.divider()
     st.caption('Perfil: ADMIN • acesso total')
-    st.caption(f'Banco: {database_mode()}')
+    st.caption(f'Banco: {database_mode()} • origem: {database_source()}')
 
 
 def data_for_view():

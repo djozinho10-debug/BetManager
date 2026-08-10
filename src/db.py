@@ -10,24 +10,45 @@ LOCAL_DB = Path(__file__).resolve().parents[1] / 'data' / 'betmanager_v2.db'
 
 
 def _database_url():
+    """Retorna (url, origem). No Cloud, prioriza st.secrets."""
+    secret_url = None
     try:
-        if 'DATABASE_URL' in st.secrets:
-            return str(st.secrets['DATABASE_URL'])
+        secret_url = st.secrets.get("DATABASE_URL")
     except Exception:
-        pass
-    return os.getenv('DATABASE_URL', f'sqlite:///{LOCAL_DB}')
+        secret_url = None
+
+    if secret_url:
+        url = str(secret_url).strip()
+        origin = "Streamlit Secrets"
+    else:
+        env_url = os.getenv("DATABASE_URL", "").strip()
+        if env_url:
+            url = env_url
+            origin = "Variável de ambiente"
+        else:
+            url = f"sqlite:///{LOCAL_DB}"
+            origin = "SQLite local"
+
+    # Aceita também a URI original do Supabase sem exigir edição manual.
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
+    return url, origin
 
 
 def _engine():
-    url = _database_url()
+    url, origin = _database_url()
     kwargs = {'pool_pre_ping': True}
     if url.startswith('sqlite:'):
         LOCAL_DB.parent.mkdir(parents=True, exist_ok=True)
         kwargs['connect_args'] = {'check_same_thread': False}
-    return create_engine(url, future=True, **kwargs)
+    else:
+        # Supabase/Postgres: falha rápido e exige conexão segura.
+        kwargs['connect_args'] = {'connect_timeout': 10, 'sslmode': 'require'}
+    return create_engine(url, future=True, **kwargs), origin
 
 
-ENGINE = _engine()
+ENGINE, DATABASE_SOURCE = _engine()
+DATABASE_ERROR = None
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS bets (
@@ -54,33 +75,38 @@ CREATE TABLE IF NOT EXISTS bets (
 
 
 def init_db():
-    with ENGINE.begin() as conn:
-        # SQLite accepts INTEGER PRIMARY KEY auto increment behavior; Postgres needs identity.
-        if ENGINE.dialect.name == 'postgresql':
-            conn.execute(text('''
-                CREATE TABLE IF NOT EXISTS bets (
-                    id BIGSERIAL PRIMARY KEY,
-                    user_name VARCHAR(120) NOT NULL,
-                    bet_date VARCHAR(20) NOT NULL,
-                    bookmaker VARCHAR(120),
-                    competition VARCHAR(180),
-                    event VARCHAR(250) NOT NULL,
-                    market VARCHAR(180),
-                    selection VARCHAR(250),
-                    bet_type VARCHAR(40),
-                    timing VARCHAR(40),
-                    odds DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-                    units DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-                    source_stake_money DOUBLE PRECISION NOT NULL DEFAULT 0,
-                    result VARCHAR(20) NOT NULL DEFAULT 'PENDENTE',
-                    profit_units DOUBLE PRECISION NOT NULL DEFAULT 0,
-                    notes TEXT,
-                    source_text TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            '''))
-        else:
-            conn.execute(text(SCHEMA))
+    global DATABASE_ERROR
+    try:
+        with ENGINE.begin() as conn:
+            if ENGINE.dialect.name == 'postgresql':
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS bets (
+                        id BIGSERIAL PRIMARY KEY,
+                        user_name VARCHAR(120) NOT NULL,
+                        bet_date VARCHAR(20) NOT NULL,
+                        bookmaker VARCHAR(120),
+                        competition VARCHAR(180),
+                        event VARCHAR(250) NOT NULL,
+                        market VARCHAR(180),
+                        selection VARCHAR(250),
+                        bet_type VARCHAR(40),
+                        timing VARCHAR(40),
+                        odds DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+                        units DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+                        source_stake_money DOUBLE PRECISION NOT NULL DEFAULT 0,
+                        result VARCHAR(20) NOT NULL DEFAULT 'PENDENTE',
+                        profit_units DOUBLE PRECISION NOT NULL DEFAULT 0,
+                        notes TEXT,
+                        source_text TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+            else:
+                conn.execute(text(SCHEMA))
+        DATABASE_ERROR = None
+    except Exception as exc:
+        DATABASE_ERROR = f"{type(exc).__name__}: {exc}"
+        raise
 
 
 def add_bet(data: dict):
@@ -152,3 +178,6 @@ def get_users():
 
 def database_mode():
     return 'PostgreSQL Cloud' if ENGINE.dialect.name == 'postgresql' else 'SQLite local'
+
+def database_source():
+    return DATABASE_SOURCE
