@@ -14,7 +14,7 @@ from src.clipboard_component import clipboard_image_paste
 from src.db import add_bet, database_mode, database_source, delete_bet, get_bets, get_users, init_db, update_result, update_bet
 from src.parser import image_to_text, parse_text
 from src.api_football import api_enabled, enrich_from_api, suggest_settlement
-from src.reports import group_report, kpis, prepare
+from src.reports import group_report, kpis, prepare, combo_report, performance_alerts
 
 st.set_page_config(page_title='BetManager Cloud', page_icon='📊', layout='wide')
 init_db()
@@ -89,7 +89,7 @@ with st.sidebar:
     if st.session_state.user_name not in users:
         users = sorted(users + [st.session_state.user_name])
     selected_view = st.selectbox('Visualizar dados de', ['TODOS'] + users, format_func=lambda x: 'Todos os apostadores' if x == 'TODOS' else x)
-    page = st.radio('Menu', ['Dashboard','Importar aposta','Apostas','Liquidação','Relatórios','Backup & Dados','Exportar'])
+    page = st.radio('Menu', ['Dashboard','Importar aposta','Apostas','Liquidação','Relatórios','Análise Inteligente','Backup & Dados','Exportar'])
     st.divider()
     st.caption('Perfil: ADMIN • acesso total')
     st.caption(f'Banco: {database_mode()} • origem: {database_source()}')
@@ -597,6 +597,143 @@ elif page == 'Relatórios':
                 daybets[['bet_date','user_name','event','market','selection','odds','result','profit_units']],
                 hide_index=True,use_container_width=True
             )
+
+elif page == 'Análise Inteligente':
+    st.subheader('Análise Inteligente')
+    st.caption('Encontra padrões de lucro e perda cruzando mercado, campeonato, faixa de odd, casa e momento.')
+
+    df = data_for_view()
+    d = prepare(df)
+
+    if d.empty:
+        st.info('Ainda não há dados suficientes para analisar.')
+    else:
+        settled = d[d['result'].isin(['WIN','HALF WIN','VOID','HALF LOSS','LOSS'])].copy()
+
+        a1,a2,a3 = st.columns(3)
+        min_bets = a1.number_input('Amostra mínima por análise', min_value=2, max_value=50, value=3, step=1)
+        combo_mode = a2.selectbox(
+            'Cruzamento principal',
+            [
+                'Mercado + Campeonato + Faixa de odd',
+                'Mercado + Faixa de odd',
+                'Mercado + Casa',
+                'Campeonato + Faixa de odd',
+                'Mercado + Momento',
+            ]
+        )
+        show_n = a3.number_input('Quantidade de linhas', min_value=5, max_value=30, value=10, step=1)
+
+        mapping = {
+            'Mercado + Campeonato + Faixa de odd':['market','competition','odd_band'],
+            'Mercado + Faixa de odd':['market','odd_band'],
+            'Mercado + Casa':['market','bookmaker'],
+            'Campeonato + Faixa de odd':['competition','odd_band'],
+            'Mercado + Momento':['market','timing'],
+        }
+        fields = mapping[combo_mode]
+        combos = combo_report(df, fields, min_bets=int(min_bets))
+        alerts = performance_alerts(df, min_bets=int(min_bets))
+
+        st.markdown('### Resumo executivo')
+        c1,c2,c3,c4 = st.columns(4)
+
+        best = alerts.get('best_combo')
+        worst = alerts.get('worst_combo')
+        bm = alerts.get('best_market')
+        wm = alerts.get('worst_market')
+
+        with c1:
+            if best:
+                st.metric('Melhor combinação', f"{best['lucro_u']:+.2f}u", f"ROI {best['roi_%']:.2f}%")
+            else:
+                st.metric('Melhor combinação', '—')
+        with c2:
+            if worst:
+                st.metric('Pior combinação', f"{worst['lucro_u']:+.2f}u", f"ROI {worst['roi_%']:.2f}%")
+            else:
+                st.metric('Pior combinação', '—')
+        with c3:
+            if bm:
+                st.metric('Melhor mercado', str(bm.get('market','—')), f"{bm.get('lucro_u',0):+.2f}u")
+            else:
+                st.metric('Melhor mercado', '—')
+        with c4:
+            if wm:
+                st.metric('Mercado de atenção', str(wm.get('market','—')), f"{wm.get('lucro_u',0):+.2f}u")
+            else:
+                st.metric('Mercado de atenção', '—')
+
+        st.markdown('### Melhores combinações')
+        if combos.empty:
+            st.info('Nenhuma combinação atingiu a amostra mínima escolhida.')
+        else:
+            cols = [c for c in fields + ['apostas','unidades','lucro_u','roi_%','acerto_%','odd_media','score'] if c in combos.columns]
+            top = combos[cols].head(int(show_n)).copy()
+            rename = {
+                'market':'Mercado','competition':'Campeonato','odd_band':'Faixa de odd',
+                'bookmaker':'Casa','timing':'Momento','apostas':'Apostas','unidades':'Unidades',
+                'lucro_u':'Lucro (u)','roi_%':'ROI %','acerto_%':'Acerto %',
+                'odd_media':'Odd média','score':'Score'
+            }
+            st.dataframe(top.rename(columns=rename), hide_index=True, use_container_width=True)
+
+            st.markdown('### Combinações de atenção')
+            worst_table = combos.sort_values(['lucro_u','roi_%']).head(int(show_n))[cols].copy()
+            st.dataframe(worst_table.rename(columns=rename), hide_index=True, use_container_width=True)
+
+        st.markdown('### Diagnóstico automático')
+        messages = []
+
+        if alerts.get('best_market'):
+            x = alerts['best_market']
+            messages.append(f"🟢 **Mercado mais eficiente:** {x.get('market')} — {x.get('lucro_u',0):+.2f}u, ROI {x.get('roi_%',0):.2f}% em {int(x.get('apostas',0))} apostas.")
+
+        if alerts.get('worst_market') and alerts['worst_market'].get('lucro_u',0) < 0:
+            x = alerts['worst_market']
+            messages.append(f"🔴 **Mercado que mais drena resultado:** {x.get('market')} — {x.get('lucro_u',0):+.2f}u, ROI {x.get('roi_%',0):.2f}% em {int(x.get('apostas',0))} apostas.")
+
+        if alerts.get('best_competition'):
+            x = alerts['best_competition']
+            messages.append(f"🏆 **Melhor campeonato:** {x.get('competition')} — {x.get('lucro_u',0):+.2f}u, ROI {x.get('roi_%',0):.2f}%.")
+
+        if alerts.get('worst_competition') and alerts['worst_competition'].get('lucro_u',0) < 0:
+            x = alerts['worst_competition']
+            messages.append(f"⚠️ **Campeonato de atenção:** {x.get('competition')} — {x.get('lucro_u',0):+.2f}u, ROI {x.get('roi_%',0):.2f}%.")
+
+        if alerts.get('best_odd_band'):
+            x = alerts['best_odd_band']
+            messages.append(f"🎯 **Faixa de odd mais rentável:** {x.get('odd_band')} — {x.get('lucro_u',0):+.2f}u, ROI {x.get('roi_%',0):.2f}%.")
+
+        if alerts.get('worst_odd_band') and alerts['worst_odd_band'].get('lucro_u',0) < 0:
+            x = alerts['worst_odd_band']
+            messages.append(f"📉 **Faixa de odd problemática:** {x.get('odd_band')} — {x.get('lucro_u',0):+.2f}u, ROI {x.get('roi_%',0):.2f}%.")
+
+        if len(settled) < 20:
+            messages.append(f"ℹ️ O histórico ainda tem **{len(settled)} apostas liquidadas**. Use os padrões como indicação inicial; a confiança aumenta com mais volume.")
+
+        if messages:
+            for msg in messages:
+                st.markdown(f"<div class='bm-insight'>{msg}</div>", unsafe_allow_html=True)
+
+        st.markdown('### Mapa de performance por faixa de odd')
+        odd_rep = group_report(df,'odd_band')
+        if not odd_rep.empty:
+            fig = px.bar(
+                odd_rep,
+                x='odd_band',
+                y='lucro_u',
+                text='lucro_u',
+                hover_data=['apostas','roi_%','odd_media'],
+                title='Lucro por faixa de odd'
+            )
+            fig.update_layout(
+                xaxis_title='Faixa de odd',
+                yaxis_title='Lucro (u)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)'
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 elif page == 'Backup & Dados':
     st.subheader('Backup & Dados')

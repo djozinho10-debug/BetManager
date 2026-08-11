@@ -77,3 +77,78 @@ def group_report(df: pd.DataFrame, field: str) -> pd.DataFrame:
     g['unidades'] = g['unidades'].round(2)
     g['odd_media'] = g['odd_media'].round(2)
     return g.sort_values('lucro_u', ascending=False)
+
+
+def combo_report(df: pd.DataFrame, fields=None, min_bets: int = 3) -> pd.DataFrame:
+    """
+    Cruza dimensões do histórico e retorna combinações com volume mínimo.
+    Ex.: market + competition + odd_band.
+    """
+    fields = fields or ['market','competition','odd_band']
+    d = prepare(df)
+    if d.empty:
+        return pd.DataFrame()
+
+    settled = d[d['result'].isin(['WIN','HALF WIN','VOID','HALF LOSS','LOSS'])].copy()
+    valid = [f for f in fields if f in settled.columns]
+    if settled.empty or not valid:
+        return pd.DataFrame()
+
+    g = settled.groupby(valid, dropna=False).agg(
+        apostas=('id','count'),
+        unidades=('units','sum'),
+        lucro_u=('profit_units','sum'),
+        odd_media=('odds','mean'),
+        wins_eq=('result', lambda x: (x == 'WIN').sum() + 0.5*(x == 'HALF WIN').sum()),
+    ).reset_index()
+
+    g = g[g['apostas'] >= int(min_bets)].copy()
+    if g.empty:
+        return g
+
+    g['roi_%'] = (g['lucro_u'] / g['unidades'] * 100).where(g['unidades'] != 0, 0)
+    g['acerto_%'] = (g['wins_eq'] / g['apostas'] * 100).where(g['apostas'] != 0, 0)
+
+    for c in ['unidades','lucro_u','odd_media','roi_%','acerto_%']:
+        g[c] = pd.to_numeric(g[c], errors='coerce').fillna(0).round(2)
+
+    # Score simples: recompensa lucro/ROI, mas pondera por amostra.
+    g['score'] = (
+        g['lucro_u'] * 2
+        + g['roi_%'] * 0.08
+        + g['apostas'].clip(upper=20) * 0.12
+    ).round(2)
+    return g.sort_values(['score','lucro_u','roi_%'], ascending=False)
+
+
+def performance_alerts(df: pd.DataFrame, min_bets: int = 3) -> dict:
+    d = prepare(df)
+    result = {
+        'best_combo': None,
+        'worst_combo': None,
+        'best_market': None,
+        'worst_market': None,
+        'best_competition': None,
+        'worst_competition': None,
+        'best_odd_band': None,
+        'worst_odd_band': None,
+    }
+    if d.empty:
+        return result
+
+    combos = combo_report(d, ['market','competition','odd_band'], min_bets=min_bets)
+    if not combos.empty:
+        result['best_combo'] = combos.iloc[0].to_dict()
+        result['worst_combo'] = combos.sort_values(['lucro_u','roi_%']).iloc[0].to_dict()
+
+    for field, bk, wk in [
+        ('market','best_market','worst_market'),
+        ('competition','best_competition','worst_competition'),
+        ('odd_band','best_odd_band','worst_odd_band'),
+    ]:
+        rep = group_report(d, field)
+        rep = rep[rep['apostas'] >= min_bets] if not rep.empty else rep
+        if not rep.empty:
+            result[bk] = rep.iloc[0].to_dict()
+            result[wk] = rep.sort_values(['lucro_u','roi_%']).iloc[0].to_dict()
+    return result
