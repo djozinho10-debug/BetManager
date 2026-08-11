@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS bets (
     bet_date VARCHAR(20) NOT NULL,
     bookmaker VARCHAR(120),
     competition VARCHAR(180),
+    country VARCHAR(120),
     event VARCHAR(250) NOT NULL,
     market VARCHAR(180),
     selection VARCHAR(250),
@@ -86,6 +87,7 @@ def init_db():
                         bet_date VARCHAR(20) NOT NULL,
                         bookmaker VARCHAR(120),
                         competition VARCHAR(180),
+                        country VARCHAR(120),
                         event VARCHAR(250) NOT NULL,
                         market VARCHAR(180),
                         selection VARCHAR(250),
@@ -103,6 +105,12 @@ def init_db():
                 """))
             else:
                 conn.execute(text(SCHEMA))
+
+            # Migração segura para bases já existentes.
+            try:
+                conn.execute(text("ALTER TABLE bets ADD COLUMN country VARCHAR(120)"))
+            except Exception:
+                pass
         DATABASE_ERROR = None
     except Exception as exc:
         DATABASE_ERROR = f"{type(exc).__name__}: {exc}"
@@ -111,7 +119,7 @@ def init_db():
 
 def add_bet(data: dict):
     cols = [
-        'user_name','bet_date','bookmaker','competition','event','market','selection',
+        'user_name','bet_date','bookmaker','competition','country','event','market','selection',
         'bet_type','timing','odds','units','source_stake_money','result','profit_units','notes','source_text'
     ]
     sql = text(f"INSERT INTO bets ({','.join(cols)}) VALUES ({','.join(':'+c for c in cols)})")
@@ -144,7 +152,7 @@ def update_result(bet_id: int, result: str):
 
 
 def update_bet(bet_id: int, data: dict):
-    cols=['user_name','bet_date','bookmaker','competition','event','market','selection','bet_type','timing','odds','units','notes']
+    cols=['user_name','bet_date','bookmaker','competition','country','event','market','selection','bet_type','timing','odds','units','notes']
     data=dict(data); data['id']=bet_id
     with ENGINE.begin() as conn:
         conn.execute(text('UPDATE bets SET '+','.join(f'{c}=:{c}' for c in cols)+' WHERE id=:id'), data)
@@ -153,6 +161,14 @@ def update_bet(bet_id: int, data: dict):
             r,odds,units=row
             profit = units*(odds-1) if r=='WIN' else units*(odds-1)/2 if r=='HALF WIN' else -units/2 if r=='HALF LOSS' else -units if r=='LOSS' else 0
             conn.execute(text('UPDATE bets SET profit_units=:p WHERE id=:id'), {'p':profit,'id':bet_id})
+
+def update_country(bet_id: int, country: str):
+    with ENGINE.begin() as conn:
+        conn.execute(
+            text('UPDATE bets SET country=:country WHERE id=:id'),
+            {'country': country, 'id': bet_id}
+        )
+
 
 def delete_bet(bet_id: int):
     with ENGINE.begin() as conn:

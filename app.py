@@ -11,7 +11,7 @@ import streamlit as st
 from PIL import Image
 
 from src.clipboard_component import clipboard_image_paste
-from src.db import add_bet, database_mode, database_source, delete_bet, get_bets, get_users, init_db, update_result, update_bet
+from src.db import add_bet, database_mode, database_source, delete_bet, get_bets, get_users, init_db, update_result, update_bet, update_country
 from src.parser import image_to_text, parse_text
 from src.api_football import api_enabled, enrich_from_api, suggest_settlement
 from src.reports import group_report, kpis, prepare, combo_report, performance_alerts
@@ -334,6 +334,7 @@ elif page == 'Importar aposta':
                 bet_date=b.date_input('Data', value=pd.to_datetime(p.get('bet_date')).date() if p.get('bet_date') else date.today())
                 bookmaker=c.selectbox('Casa', BOOKMAKER_OPTIONS, index=bookmaker_index(p.get('bookmaker','')))
                 competition=st.text_input('Campeonato', value=p.get('competition',''))
+                country=st.text_input('País', value=p.get('country', p.get('_api_country','')))
                 event=st.text_input('Evento / jogo', value=p.get('event',''))
                 a,b=st.columns(2)
                 market=a.text_input('Mercado', value=p.get('market',''))
@@ -356,7 +357,7 @@ elif page == 'Importar aposta':
                     profit = units*(odds-1) if result=='WIN' else units*(odds-1)/2 if result=='HALF WIN' else -units/2 if result=='HALF LOSS' else -units if result=='LOSS' else 0.0
                     data=dict(p); data.update({
                         'user_name':bettor.strip() or st.session_state.user_name,'bet_date':str(bet_date),'bookmaker':bookmaker,'competition':competition,
-                        'event':event or 'Evento não informado','market':market,'selection':selection,'bet_type':bet_type,'timing':timing,
+                        'country':country,'event':event or 'Evento não informado','market':market,'selection':selection,'bet_type':bet_type,'timing':timing,
                         'odds':odds,'units':units,'source_stake_money':source_money,'result':result,'profit_units':profit,'notes':notes,
                         'source_text':st.session_state.get('ocr_text','')
                     })
@@ -397,7 +398,7 @@ elif page == 'Apostas':
                 with st.form('edit_bet'):
                     e1,e2,e3=st.columns(3)
                     eu=e1.text_input('Apostador',str(row.user_name)); ed=e2.date_input('Data',pd.to_datetime(row.bet_date).date()); eb=e3.selectbox('Casa',BOOKMAKER_OPTIONS,index=bookmaker_index(str(row.bookmaker or '')))
-                    ec=st.text_input('Campeonato',str(row.competition or '')); ee=st.text_input('Evento',str(row.event))
+                    ec=st.text_input('Campeonato',str(row.competition or '')); eco=st.text_input('País',str(getattr(row,'country','') or '')); ee=st.text_input('Evento',str(row.event))
                     e1,e2=st.columns(2); em=e1.text_input('Mercado',str(row.market or '')); es=e2.text_input('Seleção',str(row.selection or ''))
                     e1,e2,e3,e4=st.columns(4)
                     et=e1.selectbox('Tipo',['Simples','Dupla','Tripla','Múltipla'],index=['Simples','Dupla','Tripla','Múltipla'].index(row.bet_type) if row.bet_type in ['Simples','Dupla','Tripla','Múltipla'] else 0)
@@ -405,7 +406,7 @@ elif page == 'Apostas':
                     eo=e3.number_input('Odd',min_value=1.0,value=float(row.odds),step=.01); eun=e4.number_input('Unidades',min_value=.05,value=float(row.units),step=.25)
                     en=st.text_area('Observações',str(row.notes or ''))
                     if st.form_submit_button('Salvar alterações',use_container_width=True):
-                        update_bet(int(bet_id),{'user_name':eu,'bet_date':str(ed),'bookmaker':eb,'competition':ec,'event':ee,'market':em,'selection':es,'bet_type':et,'timing':eti,'odds':eo,'units':eun,'notes':en})
+                        update_bet(int(bet_id),{'user_name':eu,'bet_date':str(ed),'bookmaker':eb,'competition':ec,'country':eco,'event':ee,'market':em,'selection':es,'bet_type':et,'timing':eti,'odds':eo,'units':eun,'notes':en})
                         st.success('Aposta atualizada.'); st.rerun()
             if st.button('🗑️ Excluir aposta selecionada'):
                 delete_bet(int(bet_id)); st.success('Aposta excluída.'); st.rerun()
@@ -483,7 +484,7 @@ elif page == 'Relatórios':
     if d.empty:
         st.info('Sem dados para analisar.')
     else:
-        st.caption('Cruze período, apostador, campeonato, mercado, casa, faixa de odd, momento e resultado.')
+        st.caption('Cruze período, país, apostador, campeonato, mercado, casa, faixa de odd, momento e resultado.')
 
         # Filtros
         f1,f2,f3,f4=st.columns(4)
@@ -491,20 +492,24 @@ elif page == 'Relatórios':
         min_date=dates.min()
         max_date=dates.max()
         period=f1.date_input('Período',value=(min_date,max_date),min_value=min_date,max_value=max_date)
-        users=f2.multiselect('Apostador',sorted(d['user_name'].dropna().astype(str).unique().tolist()))
-        markets=f3.multiselect('Mercado',sorted(d['market'].dropna().astype(str).unique().tolist()))
-        comps=f4.multiselect('Campeonato',sorted(d['competition'].dropna().astype(str).unique().tolist()))
+        countries_available=sorted([v for v in d.get('country',pd.Series(dtype=str)).fillna('').astype(str).unique().tolist() if v.strip()])
+        countries=f2.multiselect('País',countries_available)
+        users=f3.multiselect('Apostador',sorted(d['user_name'].dropna().astype(str).unique().tolist()))
+        markets=f4.multiselect('Mercado',sorted(d['market'].dropna().astype(str).unique().tolist()))
 
         f1,f2,f3,f4=st.columns(4)
-        books=f1.multiselect('Casa',sorted(d['bookmaker'].dropna().astype(str).unique().tolist()))
-        oddbands=f2.multiselect('Faixa de odd',sorted(d['odd_band'].dropna().astype(str).unique().tolist()))
-        timings=f3.multiselect('Momento',sorted(d['timing'].dropna().astype(str).unique().tolist()))
-        results=f4.multiselect('Resultado',sorted(d['result'].dropna().astype(str).unique().tolist()))
+        comps=f1.multiselect('Campeonato',sorted(d['competition'].dropna().astype(str).unique().tolist()))
+        books=f2.multiselect('Casa',sorted(d['bookmaker'].dropna().astype(str).unique().tolist()))
+        oddbands=f3.multiselect('Faixa de odd',sorted(d['odd_band'].dropna().astype(str).unique().tolist()))
+        timings=f4.multiselect('Momento',sorted(d['timing'].dropna().astype(str).unique().tolist()))
+
+        results=st.multiselect('Resultado',sorted(d['result'].dropna().astype(str).unique().tolist()))
 
         view=d.copy()
         if isinstance(period,(list,tuple)) and len(period)==2:
             vd=pd.to_datetime(view['bet_date'],errors='coerce').dt.date
             view=view[(vd>=period[0])&(vd<=period[1])]
+        if countries and 'country' in view.columns: view=view[view['country'].isin(countries)]
         if users: view=view[view['user_name'].isin(users)]
         if markets: view=view[view['market'].isin(markets)]
         if comps: view=view[view['competition'].isin(comps)]
@@ -574,6 +579,43 @@ elif page == 'Relatórios':
                 insights.append(f"Melhor campeonato: **{bc['competition']}** ({bc['lucro_u']:+.2f}u / ROI {bc['roi_%']:.2f}%).")
         for x in insights:
             st.markdown('• '+x)
+
+        st.markdown('### Países')
+        if 'country' in view.columns:
+            country_rep=group_report(view,'country')
+            if not country_rep.empty:
+                st.dataframe(
+                    country_rep[['country','apostas','unidades','lucro_u','roi_%','odd_media']].rename(columns={
+                        'country':'País','apostas':'Apostas','unidades':'Unidades',
+                        'lucro_u':'Lucro (u)','roi_%':'ROI %','odd_media':'Odd média'
+                    }),
+                    hide_index=True,use_container_width=True
+                )
+
+        # Preencher países ausentes em apostas antigas
+        missing_country=view[view.get('country',pd.Series(index=view.index,dtype=str)).fillna('').astype(str).str.strip().eq('')] if 'country' in view.columns else pd.DataFrame()
+        if not missing_country.empty and api_enabled():
+            with st.expander(f'🔄 Preencher país em apostas antigas ({len(missing_country)} sem país)'):
+                st.caption('Usa a API-Football para reencontrar cada partida pela data e confronto. Pode consumir chamadas da API.')
+                limit=st.number_input('Máximo de apostas nesta execução',min_value=1,max_value=100,value=min(20,len(missing_country)),step=1,key='country_backfill_limit')
+                if st.button('Preencher países agora',key='country_backfill_btn'):
+                    updated=0
+                    progress=st.progress(0)
+                    rows=missing_country.head(int(limit)).to_dict('records')
+                    for i,row in enumerate(rows,1):
+                        enriched=enrich_from_api({
+                            'event':row.get('event',''),
+                            'competition':row.get('competition',''),
+                            'country':'',
+                            'bet_date':str(pd.to_datetime(row.get('bet_date')).date())
+                        })
+                        country_found=str(enriched.get('country') or enriched.get('_api_country') or '').strip()
+                        if country_found:
+                            update_country(int(row['id']),country_found)
+                            updated+=1
+                        progress.progress(i/len(rows))
+                    st.success(f'{updated} de {len(rows)} apostas atualizadas com país.')
+                    st.rerun()
 
         # Calendário diário
         st.markdown('### Calendário de resultados')

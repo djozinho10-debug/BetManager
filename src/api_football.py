@@ -107,7 +107,8 @@ def enrich_from_api(parsed, min_confidence=0.72):
         data["event"] = f"{home} x {away}"
 
     data["competition"] = str(league.get("name") or data.get("competition", "")).strip()
-    data["_api_country"] = str(league.get("country") or "").strip()
+    data["country"] = str(league.get("country") or data.get("country", "")).strip()
+    data["_api_country"] = data["country"]
     data["_api_fixture_id"] = fixture.get("id")
     data["_api_confidence"] = round(best_score, 3)
     data["_api_status"] = f"API confirmou a partida ({best_score:.0%})"
