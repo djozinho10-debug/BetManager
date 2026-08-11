@@ -5,6 +5,12 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     out = df.copy()
+    # Histórico antigo: separa automaticamente Gols +/- conforme a seleção.
+    if 'market' in out.columns and 'selection' in out.columns:
+        generic = out['market'].fillna('').astype(str).eq('Gols +/-')
+        sel = out['selection'].fillna('').astype(str).str.lower()
+        out.loc[generic & sel.str.startswith('over '), 'market'] = 'Over Gols'
+        out.loc[generic & sel.str.startswith('under '), 'market'] = 'Under Gols'
     out['bet_date'] = pd.to_datetime(out['bet_date'], errors='coerce')
     for c in ['odds','units','profit_units','source_stake_money']:
         if c in out.columns:

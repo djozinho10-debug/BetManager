@@ -186,7 +186,12 @@ def parse_text(text: str) -> dict:
     elif re.search(r'resultado\s+final|moneyline|vencedor',lowclean,re.I):
         market='Resultado final'
     elif any(re.search(r'gols?\s*[+\-]',x,re.I) for x in lines) or re.search(r'(menos de|mais de|over|under)\s+\d',lowclean,re.I):
-        market='Gols +/-'
+        if re.search(r'\b(?:mais de|over)\b', lowclean, re.I):
+            market='Over Gols'
+        elif re.search(r'\b(?:menos de|under)\b', lowclean, re.I):
+            market='Under Gols'
+        else:
+            market='Gols +/-'
 
     # Times: primeiro tenta "A x B"; depois procura duas linhas com cara de nome de equipe.
     event=''
@@ -225,6 +230,11 @@ def parse_text(text: str) -> dict:
             standardized_source = _line
             break
     selection=_standardize_selection(standardized_source)
+    if market == 'Gols +/-':
+        if str(selection).lower().startswith('over '):
+            market = 'Over Gols'
+        elif str(selection).lower().startswith('under '):
+            market = 'Under Gols'
     event=_clean_event_name(event)
 
     return {
