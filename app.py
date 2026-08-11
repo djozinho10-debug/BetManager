@@ -1,5 +1,8 @@
 import base64
 import io
+import zipfile
+import json
+from datetime import datetime
 from datetime import date
 
 import pandas as pd
@@ -47,6 +50,22 @@ div[data-testid="stMetricValue"] { font-weight: 750; }
 }
 h3 { margin-top: 1.2rem !important; }
 hr { border-color: rgba(255,255,255,.08) !important; }
+
+.bm-insight {
+    background: linear-gradient(145deg, rgba(18,29,40,.96), rgba(11,19,27,.96));
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 12px;
+    padding: 14px 15px;
+    min-height: 78px;
+    margin-bottom: 10px;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label {
+    padding: .35rem .4rem;
+    border-radius: 8px;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover {
+    background: rgba(255,255,255,.05);
+}
 </style>
 ''', unsafe_allow_html=True)
 
@@ -70,7 +89,7 @@ with st.sidebar:
     if st.session_state.user_name not in users:
         users = sorted(users + [st.session_state.user_name])
     selected_view = st.selectbox('Visualizar dados de', ['TODOS'] + users, format_func=lambda x: 'Todos os apostadores' if x == 'TODOS' else x)
-    page = st.radio('Menu', ['Dashboard','Importar aposta','Apostas','Liquidação','Relatórios','Exportar'])
+    page = st.radio('Menu', ['Dashboard','Importar aposta','Apostas','Liquidação','Relatórios','Backup & Dados','Exportar'])
     st.divider()
     st.caption('Perfil: ADMIN • acesso total')
     st.caption(f'Banco: {database_mode()} • origem: {database_source()}')
@@ -130,7 +149,16 @@ if page == 'Dashboard':
         with c1:
             if not settled.empty:
                 settled['lucro_acumulado_u'] = settled['profit_units'].cumsum()
-                st.plotly_chart(px.area(settled,x='bet_date',y='lucro_acumulado_u',markers=True,title='Evolução do Lucro (U)'),use_container_width=True)
+                fig_profit = px.area(settled,x='bet_date',y='lucro_acumulado_u',markers=True,title='Evolução do Lucro (U)')
+                fig_profit.update_layout(
+                    margin=dict(l=10,r=10,t=55,b=10),
+                    xaxis_title='Data',
+                    yaxis_title='Lucro acumulado (u)',
+                    hovermode='x unified',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)'
+                )
+                st.plotly_chart(fig_profit,use_container_width=True)
             else:
                 st.info('Sem apostas liquidadas para montar a curva de lucro.')
         with c2:
@@ -138,7 +166,15 @@ if page == 'Dashboard':
                 result_order=['WIN','HALF WIN','VOID','HALF LOSS','LOSS']
                 rc=settled['result'].value_counts().reindex(result_order,fill_value=0).reset_index()
                 rc.columns=['Resultado','Quantidade']
-                st.plotly_chart(px.bar(rc,x='Resultado',y='Quantidade',title='Distribuição de resultados'),use_container_width=True)
+                fig_res = px.bar(rc,x='Resultado',y='Quantidade',title='Distribuição de resultados',text='Quantidade')
+                fig_res.update_layout(
+                    margin=dict(l=10,r=10,t=55,b=10),
+                    xaxis_title='Resultado',
+                    yaxis_title='Quantidade',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)'
+                )
+                st.plotly_chart(fig_res,use_container_width=True)
 
         st.markdown('### Onde está o resultado')
         c1,c2 = st.columns(2)
@@ -146,24 +182,36 @@ if page == 'Dashboard':
             mr = group_report(df,'market')
             st.markdown('#### Mercados')
             if not mr.empty:
-                st.dataframe(mr[['market','apostas','unidades','lucro_u','roi_%','odd_media']].head(8),hide_index=True,use_container_width=True)
+                _mr = mr[['market','apostas','unidades','lucro_u','roi_%','odd_media']].head(8).rename(columns={
+                    'market':'Mercado','apostas':'Apostas','unidades':'Unidades','lucro_u':'Lucro (u)','roi_%':'ROI %','odd_media':'Odd média'
+                })
+                st.dataframe(_mr,hide_index=True,use_container_width=True)
         with c2:
             cr = group_report(df,'competition')
             st.markdown('#### Campeonatos')
             if not cr.empty:
-                st.dataframe(cr[['competition','apostas','unidades','lucro_u','roi_%','odd_media']].head(8),hide_index=True,use_container_width=True)
+                _cr = cr[['competition','apostas','unidades','lucro_u','roi_%','odd_media']].head(8).rename(columns={
+                    'competition':'Campeonato','apostas':'Apostas','unidades':'Unidades','lucro_u':'Lucro (u)','roi_%':'ROI %','odd_media':'Odd média'
+                })
+                st.dataframe(_cr,hide_index=True,use_container_width=True)
 
         c1,c2 = st.columns(2)
         with c1:
             orp = group_report(df,'odd_band')
             st.markdown('#### Faixas de odd')
             if not orp.empty:
-                st.dataframe(orp[['odd_band','apostas','lucro_u','roi_%','odd_media']].head(8),hide_index=True,use_container_width=True)
+                _orp = orp[['odd_band','apostas','lucro_u','roi_%','odd_media']].head(8).rename(columns={
+                    'odd_band':'Faixa de odd','apostas':'Apostas','lucro_u':'Lucro (u)','roi_%':'ROI %','odd_media':'Odd média'
+                })
+                st.dataframe(_orp,hide_index=True,use_container_width=True)
         with c2:
             tr = group_report(df,'timing')
             st.markdown('#### Pré-jogo x Ao vivo')
             if not tr.empty:
-                st.dataframe(tr[['timing','apostas','lucro_u','roi_%','odd_media']],hide_index=True,use_container_width=True)
+                _tr = tr[['timing','apostas','lucro_u','roi_%','odd_media']].rename(columns={
+                    'timing':'Momento','apostas':'Apostas','lucro_u':'Lucro (u)','roi_%':'ROI %','odd_media':'Odd média'
+                })
+                st.dataframe(_tr,hide_index=True,use_container_width=True)
 
         st.markdown('### Insights rápidos')
         insights=[]
@@ -197,8 +245,13 @@ if page == 'Dashboard':
             if pend:
                 insights.append(f"⏳ Existem **{pend} apostas pendentes** para liquidar.")
         if insights:
-            for item in insights[:6]:
-                st.markdown(item)
+            cols = st.columns(min(3, len(insights[:6])))
+            for i, item in enumerate(insights[:6]):
+                with cols[i % len(cols)]:
+                    st.markdown(
+                        f"<div class='bm-insight'>{item}</div>",
+                        unsafe_allow_html=True
+                    )
         else:
             st.caption('Os insights aparecerão conforme as apostas forem sendo liquidadas.')
 
@@ -544,6 +597,90 @@ elif page == 'Relatórios':
                 daybets[['bet_date','user_name','event','market','selection','odds','result','profit_units']],
                 hide_index=True,use_container_width=True
             )
+
+elif page == 'Backup & Dados':
+    st.subheader('Backup & Dados')
+    st.caption('Gere uma cópia completa do histórico compartilhado. O backup não altera nem apaga o banco online.')
+
+    full_df = get_bets()
+    normalized_df = prepare(full_df) if not full_df.empty else full_df.copy()
+
+    b1,b2,b3,b4 = st.columns(4)
+    b1.metric('Registros', len(full_df))
+    b2.metric('Apostadores', full_df['user_name'].nunique() if not full_df.empty else 0)
+    b3.metric('Pendentes', int((full_df['result']=='PENDENTE').sum()) if not full_df.empty else 0)
+    b4.metric('Banco', database_mode())
+
+    if full_df.empty:
+        st.info('Ainda não há apostas para gerar backup.')
+    else:
+        stamp = datetime.now().strftime('%Y-%m-%d_%H-%M')
+
+        # CSV
+        csv_bytes = full_df.to_csv(index=False).encode('utf-8-sig')
+
+        # Excel com base bruta + base normalizada + resumo
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            full_df.to_excel(writer, sheet_name='Apostas', index=False)
+            normalized_df.to_excel(writer, sheet_name='Apostas_Normalizadas', index=False)
+            summary = pd.DataFrame([{
+                'gerado_em': datetime.now().isoformat(timespec='seconds'),
+                'registros': len(full_df),
+                'apostadores': full_df['user_name'].nunique(),
+                'pendentes': int((full_df['result']=='PENDENTE').sum()),
+                'banco': database_mode(),
+            }])
+            summary.to_excel(writer, sheet_name='Resumo', index=False)
+        excel_bytes = excel_buffer.getvalue()
+
+        # ZIP completo
+        zip_buffer = io.BytesIO()
+        metadata = {
+            'app': 'BetManager Professional',
+            'generated_at': datetime.now().isoformat(timespec='seconds'),
+            'database_mode': database_mode(),
+            'records': int(len(full_df)),
+            'users': int(full_df['user_name'].nunique()),
+            'pending': int((full_df['result']=='PENDENTE').sum()),
+        }
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as z:
+            z.writestr('apostas.csv', csv_bytes)
+            z.writestr('apostas.xlsx', excel_bytes)
+            z.writestr('metadata.json', json.dumps(metadata, ensure_ascii=False, indent=2))
+        backup_zip = zip_buffer.getvalue()
+
+        st.markdown('### Baixar backup')
+        c1,c2,c3 = st.columns(3)
+        c1.download_button(
+            '📦 Backup completo (.zip)',
+            data=backup_zip,
+            file_name=f'BetManager_Backup_{stamp}.zip',
+            mime='application/zip',
+            use_container_width=True,
+            type='primary'
+        )
+        c2.download_button(
+            '📗 Excel completo',
+            data=excel_bytes,
+            file_name=f'BetManager_{stamp}.xlsx',
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            use_container_width=True
+        )
+        c3.download_button(
+            '📄 CSV bruto',
+            data=csv_bytes,
+            file_name=f'BetManager_{stamp}.csv',
+            mime='text/csv',
+            use_container_width=True
+        )
+
+        st.markdown('### O que entra no backup')
+        st.info('O ZIP contém o CSV bruto, uma planilha Excel com base original + base normalizada e um arquivo de metadados. Senhas, chaves da API e Secrets do Streamlit não são incluídos.')
+
+        with st.expander('Visualizar últimos registros'):
+            cols=[c for c in ['id','bet_date','user_name','bookmaker','event','market','selection','odds','units','result','profit_units'] if c in normalized_df.columns]
+            st.dataframe(normalized_df[cols].head(50),hide_index=True,use_container_width=True)
 
 elif page == 'Exportar':
     df=data_for_view(); scope='todos' if selected_view=='TODOS' else selected_view

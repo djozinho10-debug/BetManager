@@ -5,20 +5,25 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     out = df.copy()
-    # Normaliza o histórico antigo antes de qualquer agrupamento/relatório.
-    # Assim "Gols +/-" deixa de aparecer em Mercados quando a seleção identifica Over/Under.
+    # Normalização definitiva do mercado de gols.
+    # Reclassifica registros antigos salvos como Gols +/- usando qualquer indicação
+    # de Over/Under (inclusive Mais de/Menos de) encontrada na seleção.
     if 'market' in out.columns and 'selection' in out.columns:
-        _market = out['market'].fillna('').astype(str).str.strip()
+        _m = out['market'].fillna('').astype(str).str.strip().str.lower()
         _sel = out['selection'].fillna('').astype(str).str.strip().str.lower()
-        _generic = _market.str.lower().isin(['gols +/-', 'gols +-', 'gols +/- '])
-        out.loc[_generic & _sel.str.match(r'^(over|mais de)\b'), 'market'] = 'Over Gols'
-        out.loc[_generic & _sel.str.match(r'^(under|menos de)\b'), 'market'] = 'Under Gols'
-    # Histórico antigo: separa automaticamente Gols +/- conforme a seleção.
-    if 'market' in out.columns and 'selection' in out.columns:
-        generic = out['market'].fillna('').astype(str).eq('Gols +/-')
-        sel = out['selection'].fillna('').astype(str).str.lower()
-        out.loc[generic & sel.str.startswith('over '), 'market'] = 'Over Gols'
-        out.loc[generic & sel.str.startswith('under '), 'market'] = 'Under Gols'
+        _generic = _m.str.contains(r'gols\s*\+?\s*/?\s*-', regex=True, na=False)
+
+        _over = _sel.str.contains(r'\b(over|mais\s+de)\b', regex=True, na=False)
+        _under = _sel.str.contains(r'\b(under|menos\s+de)\b', regex=True, na=False)
+
+        out.loc[_generic & _over, 'market'] = 'Over Gols'
+        out.loc[_generic & _under, 'market'] = 'Under Gols'
+
+        # Não deixa o rótulo antigo aparecer nos relatórios.
+        # Casos legados sem direção identificável ficam explicitamente marcados.
+        _m2 = out['market'].fillna('').astype(str).str.strip().str.lower()
+        _still_generic = _m2.str.contains(r'gols\s*\+?\s*/?\s*-', regex=True, na=False)
+        out.loc[_still_generic, 'market'] = 'Gols — revisar Over/Under'
     out['bet_date'] = pd.to_datetime(out['bet_date'], errors='coerce')
     for c in ['odds','units','profit_units','source_stake_money']:
         if c in out.columns:
