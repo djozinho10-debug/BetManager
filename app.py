@@ -18,6 +18,40 @@ init_db()
 
 st.markdown('''
 <style>
+/* Dashboard Pro visual */
+[data-testid="stAppViewContainer"] { background: #0b1017; }
+[data-testid="stSidebar"] { background: #0d141d; border-right: 1px solid rgba(255,255,255,.07); }
+.block-container { max-width: 1500px; padding-top: 1.4rem; padding-bottom: 3rem; }
+
+div[data-testid="stMetric"] {
+    background: linear-gradient(145deg, rgba(20,29,40,.98), rgba(13,20,29,.98));
+    border: 1px solid rgba(255,255,255,.08);
+    padding: 15px 16px;
+    border-radius: 13px;
+    min-height: 112px;
+    box-shadow: 0 8px 22px rgba(0,0,0,.14);
+}
+div[data-testid="stMetric"] label { font-size: .78rem !important; text-transform: uppercase; letter-spacing: .035em; opacity:.78; }
+div[data-testid="stMetricValue"] { font-weight: 750; }
+
+[data-testid="stDataFrame"] {
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 12px;
+    overflow: hidden;
+}
+[data-testid="stPlotlyChart"] {
+    background: #101821;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 14px;
+    padding: 8px;
+}
+h3 { margin-top: 1.2rem !important; }
+hr { border-color: rgba(255,255,255,.08) !important; }
+</style>
+''', unsafe_allow_html=True)
+
+st.markdown('''
+<style>
 .block-container {padding-top:1.3rem;max-width:1500px}
 [data-testid="stMetric"] {border:1px solid rgba(120,120,120,.18);padding:14px;border-radius:14px}
 </style>
@@ -96,7 +130,7 @@ if page == 'Dashboard':
         with c1:
             if not settled.empty:
                 settled['lucro_acumulado_u'] = settled['profit_units'].cumsum()
-                st.plotly_chart(px.line(settled,x='bet_date',y='lucro_acumulado_u',markers=True,title='Lucro acumulado (u)'),use_container_width=True)
+                st.plotly_chart(px.area(settled,x='bet_date',y='lucro_acumulado_u',markers=True,title='Evolução do Lucro (U)'),use_container_width=True)
             else:
                 st.info('Sem apostas liquidadas para montar a curva de lucro.')
         with c2:
@@ -149,6 +183,16 @@ if page == 'Dashboard':
             if not cr.empty:
                 bestc=cr.iloc[0]
                 insights.append(f"🏆 Melhor campeonato: **{bestc['competition']}** ({bestc['lucro_u']:+.2f}u).")
+            if not settled.empty:
+                _daily = settled.copy()
+                _daily['_dia'] = pd.to_datetime(_daily['bet_date'], errors='coerce').dt.date
+                _daily = _daily.groupby('_dia', as_index=False)['profit_units'].sum()
+                if not _daily.empty:
+                    _bestday = _daily.loc[_daily['profit_units'].idxmax()]
+                    _worstday = _daily.loc[_daily['profit_units'].idxmin()]
+                    insights.append(f"📈 Melhor dia: **{_bestday['_dia']}** ({_bestday['profit_units']:+.2f}u).")
+                    if _worstday['profit_units'] < 0:
+                        insights.append(f"📉 Pior dia: **{_worstday['_dia']}** ({_worstday['profit_units']:+.2f}u).")
             pend = int((d['result']=='PENDENTE').sum())
             if pend:
                 insights.append(f"⏳ Existem **{pend} apostas pendentes** para liquidar.")

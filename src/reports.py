@@ -5,6 +5,14 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     out = df.copy()
+    # Normaliza o histórico antigo antes de qualquer agrupamento/relatório.
+    # Assim "Gols +/-" deixa de aparecer em Mercados quando a seleção identifica Over/Under.
+    if 'market' in out.columns and 'selection' in out.columns:
+        _market = out['market'].fillna('').astype(str).str.strip()
+        _sel = out['selection'].fillna('').astype(str).str.strip().str.lower()
+        _generic = _market.str.lower().isin(['gols +/-', 'gols +-', 'gols +/- '])
+        out.loc[_generic & _sel.str.match(r'^(over|mais de)\b'), 'market'] = 'Over Gols'
+        out.loc[_generic & _sel.str.match(r'^(under|menos de)\b'), 'market'] = 'Under Gols'
     # Histórico antigo: separa automaticamente Gols +/- conforme a seleção.
     if 'market' in out.columns and 'selection' in out.columns:
         generic = out['market'].fillna('').astype(str).eq('Gols +/-')
