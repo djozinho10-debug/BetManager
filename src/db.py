@@ -111,6 +111,18 @@ def init_db():
                 conn.execute(text("ALTER TABLE bets ADD COLUMN country VARCHAR(120)"))
             except Exception:
                 pass
+            migrations = [
+                "ALTER TABLE bets ADD COLUMN game_time VARCHAR(30)",
+                "ALTER TABLE bets ADD COLUMN reminder_10m INTEGER DEFAULT 1",
+                "ALTER TABLE bets ADD COLUMN reminder_sent INTEGER DEFAULT 0",
+                "ALTER TABLE bets ADD COLUMN telegram_sent INTEGER DEFAULT 0",
+                "ALTER TABLE bets ADD COLUMN telegram_message_id VARCHAR(80)",
+            ]
+            for migration in migrations:
+                try:
+                    conn.execute(text(migration))
+                except Exception:
+                    pass
         DATABASE_ERROR = None
     except Exception as exc:
         DATABASE_ERROR = f"{type(exc).__name__}: {exc}"
