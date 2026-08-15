@@ -3,7 +3,7 @@ import io
 import zipfile
 import json
 from datetime import datetime
-from datetime import date, time
+from datetime import date
 
 import pandas as pd
 import plotly.express as px
@@ -15,11 +15,9 @@ from src.db import add_bet, database_mode, database_source, delete_bet, get_bets
 from src.parser import image_to_text, parse_text
 from src.api_football import api_enabled, enrich_from_api, suggest_settlement
 from src.reports import group_report, kpis, prepare, combo_report, performance_alerts
-from src.telegram_dispatcher import configured as telegram_configured, dispatch_bet, start_worker
 
 st.set_page_config(page_title='BetManager Cloud', page_icon='📊', layout='wide')
 init_db()
-start_worker()
 
 st.markdown('''
 <style>
@@ -91,7 +89,7 @@ with st.sidebar:
     if st.session_state.user_name not in users:
         users = sorted(users + [st.session_state.user_name])
     selected_view = st.selectbox('Visualizar dados de', ['TODOS'] + users, format_func=lambda x: 'Todos os apostadores' if x == 'TODOS' else x)
-    page = st.radio('Menu', ['Dashboard','Importar aposta','Apostas','📣 Disparador Telegram','Liquidação','Relatórios','Análise Inteligente','Backup & Dados','Exportar'])
+    page = st.radio('Menu', ['Dashboard','Importar aposta','Apostas','Liquidação','Relatórios','Análise Inteligente','Backup & Dados','Exportar'])
     st.divider()
     st.caption('Perfil: ADMIN • acesso total')
     st.caption(f'Banco: {database_mode()} • origem: {database_source()}')
@@ -351,9 +349,6 @@ elif page == 'Importar aposta':
                 odds=c.number_input('Odd',min_value=1.0,value=float(p.get('odds',1.0)),step=0.01)
                 units=d.number_input('Unidades (u)',min_value=0.05,value=float(p.get('units',1.0)),step=0.25,help='Padrão 1u. O valor em reais do print não entra no ROI.')
                 a,b=st.columns(2)
-                game_clock=a.time_input('Horário do jogo', value=time(20,0), help='Usado para o aviso automático 10 minutos antes.')
-                reminder_10m=b.checkbox('Avisar 10 min antes', value=True)
-                a,b=st.columns(2)
                 result=a.selectbox('Resultado',['PENDENTE','WIN','HALF WIN','VOID','HALF LOSS','LOSS'])
                 source_money=b.number_input('Valor em R$ do print (informativo)',min_value=0.0,value=float(p.get('source_stake_money',0.0)),step=1.0,disabled=True)
                 notes=st.text_area('Observações')
@@ -366,14 +361,7 @@ elif page == 'Importar aposta':
                         'odds':odds,'units':units,'source_stake_money':source_money,'result':result,'profit_units':profit,'notes':notes,
                         'source_text':st.session_state.get('ocr_text','')
                     })
-                    data['game_time'] = datetime.combine(bet_date, game_clock).isoformat(timespec='minutes')
-                    data['reminder_10m'] = 1 if reminder_10m else 0
                     add_bet(data)
-                    from src.db import ENGINE
-                    from sqlalchemy import text as sql_text
-                    with ENGINE.begin() as conn:
-                        last_id = conn.execute(sql_text('SELECT MAX(id) FROM bets')).scalar()
-                        conn.execute(sql_text('UPDATE bets SET game_time=:gt, reminder_10m=:r, reminder_sent=0 WHERE id=:id'), {'gt':data['game_time'],'r':data['reminder_10m'],'id':last_id})
                     st.success(f'Aposta salva: {units:.2f}u para {data["user_name"]}.')
                     for key in ['parsed_bet','ocr_text','current_bet_image','last_image_token','read_error']:
                         st.session_state.pop(key, None)
@@ -422,40 +410,6 @@ elif page == 'Apostas':
                         st.success('Aposta atualizada.'); st.rerun()
             if st.button('🗑️ Excluir aposta selecionada'):
                 delete_bet(int(bet_id)); st.success('Aposta excluída.'); st.rerun()
-
-elif page == '📣 Disparador Telegram':
-    st.subheader('📣 Disparador Telegram')
-    st.caption('Envie a entrada agora e deixe o BetManager disparar o lembrete 10 minutos antes do jogo.')
-    if not telegram_configured():
-        st.warning('Telegram ainda não configurado. Adicione TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID nos Secrets do Streamlit.')
-    df = data_for_view()
-    if df.empty:
-        st.info('Nenhuma aposta cadastrada.')
-    else:
-        pending = df[df['result'].eq('PENDENTE')].copy()
-        if pending.empty:
-            st.info('Não há apostas pendentes para disparar.')
-        else:
-            pending['resumo'] = pending.apply(lambda r: f"#{r['id']} • {r['event']} • {r['selection']} • @{float(r['odds']):.2f}", axis=1)
-            choice = st.selectbox('Escolha a aposta', pending['id'].tolist(), format_func=lambda x: pending.loc[pending['id'].eq(x),'resumo'].iloc[0])
-            row = pending[pending['id'].eq(choice)].iloc[0]
-            c1,c2,c3 = st.columns(3)
-            c1.metric('Odd', f"{float(row.odds):.2f}")
-            c2.metric('Stake', f"{float(row.units):g}u")
-            c3.metric('Status Telegram', 'Enviada' if int(row.get('telegram_sent') or 0) else 'Não enviada')
-            gt = row.get('game_time')
-            if gt:
-                try: st.info('⏰ Jogo: ' + datetime.fromisoformat(str(gt)).strftime('%d/%m/%Y às %H:%M') + (' • lembrete 10 min antes' if int(row.get('reminder_10m') or 0) else ' • sem lembrete'))
-                except Exception: pass
-            else:
-                st.warning('Esta aposta não possui horário do jogo. Edite/reimporte com horário para usar o lembrete.')
-            if st.button('🚀 Disparar aposta no Telegram', type='primary', use_container_width=True, disabled=not telegram_configured()):
-                try:
-                    dispatch_bet(int(choice))
-                    st.success('Aposta enviada ao Telegram. O lembrete de 10 minutos ficou agendado.')
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f'Falha ao enviar: {exc}')
 
 elif page == 'Liquidação':
     st.subheader('Liquidação e pendências')
