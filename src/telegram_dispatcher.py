@@ -3,6 +3,7 @@ import base64
 import threading
 import time
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import requests
 import re
 from urllib.parse import urlparse
@@ -249,7 +250,12 @@ def dispatch_result(bet_id: int, force: bool = False):
         return mid
 
 def _check_reminders():
-    now = datetime.now()
+    # game_time é salvo como horário LOCAL de Brasília (sem offset).
+    # O Streamlit Cloud roda normalmente em UTC, portanto datetime.now() sem
+    # timezone fazia o lembrete disparar ~3h antes. Comparamos tudo explicitamente
+    # em America/Sao_Paulo para evitar diferença entre servidor e usuário.
+    br_tz = ZoneInfo("America/Sao_Paulo")
+    now = datetime.now(br_tz)
     horizon = now + timedelta(minutes=10, seconds=59)
     with ENGINE.connect() as conn:
         rows = conn.execute(text("SELECT * FROM bets WHERE telegram_sent=1 AND reminder_10m=1 AND reminder_sent=0 AND game_time IS NOT NULL")).mappings().all()
@@ -257,6 +263,11 @@ def _check_reminders():
         row = dict(raw)
         try:
             game_time = datetime.fromisoformat(str(row['game_time']))
+            if game_time.tzinfo is None:
+                # Valores atuais do banco já representam hora de Brasília.
+                game_time = game_time.replace(tzinfo=br_tz)
+            else:
+                game_time = game_time.astimezone(br_tz)
         except Exception:
             continue
         target = game_time - timedelta(minutes=10)
