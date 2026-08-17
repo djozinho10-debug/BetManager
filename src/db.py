@@ -106,23 +106,41 @@ def init_db():
             else:
                 conn.execute(text(SCHEMA))
 
-            # Migração segura para bases já existentes.
-            try:
-                conn.execute(text("ALTER TABLE bets ADD COLUMN country VARCHAR(120)"))
-            except Exception:
-                pass
+            # Migrações de colunas são executadas abaixo, fora desta transação.
+            # No PostgreSQL, um ALTER TABLE que falha deixa a transação inteira
+            # abortada; por isso não podemos simplesmente capturar a exceção e
+            # continuar no mesmo ENGINE.begin().
+
+        # Migração segura para bases já existentes.
+        if ENGINE.dialect.name == 'postgresql':
             migrations = [
-                "ALTER TABLE bets ADD COLUMN game_time VARCHAR(30)",
-                "ALTER TABLE bets ADD COLUMN reminder_10m INTEGER DEFAULT 1",
-                "ALTER TABLE bets ADD COLUMN reminder_sent INTEGER DEFAULT 0",
-                "ALTER TABLE bets ADD COLUMN telegram_sent INTEGER DEFAULT 0",
-                "ALTER TABLE bets ADD COLUMN telegram_message_id VARCHAR(80)",
+                "ALTER TABLE bets ADD COLUMN IF NOT EXISTS country VARCHAR(120)",
+                "ALTER TABLE bets ADD COLUMN IF NOT EXISTS game_time VARCHAR(30)",
+                "ALTER TABLE bets ADD COLUMN IF NOT EXISTS reminder_10m INTEGER DEFAULT 1",
+                "ALTER TABLE bets ADD COLUMN IF NOT EXISTS reminder_sent INTEGER DEFAULT 0",
+                "ALTER TABLE bets ADD COLUMN IF NOT EXISTS telegram_sent INTEGER DEFAULT 0",
+                "ALTER TABLE bets ADD COLUMN IF NOT EXISTS telegram_message_id VARCHAR(80)",
             ]
-            for migration in migrations:
-                try:
+            with ENGINE.begin() as conn:
+                for migration in migrations:
                     conn.execute(text(migration))
-                except Exception:
-                    pass
+        else:
+            # SQLite não suporta ADD COLUMN IF NOT EXISTS em todas as versões.
+            # Descobrimos as colunas existentes antes de alterar a tabela.
+            with ENGINE.connect() as conn:
+                existing = {row[1] for row in conn.execute(text("PRAGMA table_info(bets)")).fetchall()}
+            sqlite_columns = {
+                'country': 'VARCHAR(120)',
+                'game_time': 'VARCHAR(30)',
+                'reminder_10m': 'INTEGER DEFAULT 1',
+                'reminder_sent': 'INTEGER DEFAULT 0',
+                'telegram_sent': 'INTEGER DEFAULT 0',
+                'telegram_message_id': 'VARCHAR(80)',
+            }
+            for col, definition in sqlite_columns.items():
+                if col not in existing:
+                    with ENGINE.begin() as conn:
+                        conn.execute(text(f"ALTER TABLE bets ADD COLUMN {col} {definition}"))
         DATABASE_ERROR = None
     except Exception as exc:
         DATABASE_ERROR = f"{type(exc).__name__}: {exc}"
@@ -132,12 +150,20 @@ def init_db():
 def add_bet(data: dict):
     cols = [
         'user_name','bet_date','bookmaker','competition','country','event','market','selection',
-        'bet_type','timing','odds','units','source_stake_money','result','profit_units','notes','source_text'
+        'bet_type','timing','odds','units','source_stake_money','result','profit_units','notes','source_text',
+        'game_time','reminder_10m','reminder_sent','telegram_sent','telegram_message_id'
     ]
     sql = text(f"INSERT INTO bets ({','.join(cols)}) VALUES ({','.join(':'+c for c in cols)})")
     params = {c: data.get(c) for c in cols}
+    params['reminder_10m'] = 1 if data.get('reminder_10m', 1) else 0
+    params['reminder_sent'] = int(data.get('reminder_sent') or 0)
+    params['telegram_sent'] = int(data.get('telegram_sent') or 0)
     with ENGINE.begin() as conn:
-        conn.execute(sql, params)
+        if ENGINE.dialect.name == 'postgresql':
+            result = conn.execute(text(str(sql) + ' RETURNING id'), params)
+            return int(result.scalar_one())
+        result = conn.execute(sql, params)
+        return int(result.lastrowid)
 
 
 def update_result(bet_id: int, result: str):

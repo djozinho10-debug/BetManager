@@ -368,12 +368,10 @@ elif page == 'Importar aposta':
                     })
                     data['game_time'] = datetime.combine(bet_date, game_clock).isoformat(timespec='minutes')
                     data['reminder_10m'] = 1 if reminder_10m else 0
+                    data['reminder_sent'] = 0
+                    data['telegram_sent'] = 0
+                    data['telegram_message_id'] = None
                     add_bet(data)
-                    from src.db import ENGINE
-                    from sqlalchemy import text as sql_text
-                    with ENGINE.begin() as conn:
-                        last_id = conn.execute(sql_text('SELECT MAX(id) FROM bets')).scalar()
-                        conn.execute(sql_text('UPDATE bets SET game_time=:gt, reminder_10m=:r, reminder_sent=0 WHERE id=:id'), {'gt':data['game_time'],'r':data['reminder_10m'],'id':last_id})
                     st.success(f'Aposta salva: {units:.2f}u para {data["user_name"]}.')
                     for key in ['parsed_bet','ocr_text','current_bet_image','last_image_token','read_error']:
                         st.session_state.pop(key, None)
