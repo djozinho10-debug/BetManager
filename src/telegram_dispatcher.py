@@ -4,6 +4,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 import requests
+import re
 from urllib.parse import urlparse
 import streamlit as st
 from io import BytesIO
@@ -34,9 +35,19 @@ def configured():
 
 
 
+def extract_bet_link(text_value: str | None):
+    """Extrai o primeiro link http/https encontrado em Observações."""
+    text_value = str(text_value or '')
+    match = re.search(r'https?://[^\s<>"\']+', text_value, flags=re.IGNORECASE)
+    if not match:
+        return ''
+    # Remove pontuação comum que pode ter sido colada logo depois do link.
+    return match.group(0).rstrip('.,;:!?)]}')
+
+
 def _bet_button(row):
-    """Retorna inline keyboard para um link http/https cadastrado na aposta."""
-    url = str(row.get('bet_link') or '').strip()
+    """Cria o botão usando o link salvo ou, como fallback, o link das Observações."""
+    url = str(row.get('bet_link') or '').strip() or extract_bet_link(row.get('notes'))
     if not url:
         return None
     try:
@@ -47,14 +58,15 @@ def _bet_button(row):
         return None
 
     host = parsed.netloc.lower()
-    if 'bet365' in host:
+    bookmaker = str(row.get('bookmaker') or '').strip().lower()
+    if 'bet365' in host or bookmaker == 'bet365':
         label = '🎯 ABRIR NA BET365'
-    elif 'betano' in host:
+    elif 'betano' in host or bookmaker == 'betano':
         label = '🎯 ABRIR NA BETANO'
-    elif 'pinnacle' in host:
+    elif 'betfair' in host or bookmaker in ('bolsa', 'betfair'):
+        label = '📈 ABRIR NA BOLSA'
+    elif 'pinnacle' in host or bookmaker == 'pinnacle':
         label = '🎯 ABRIR NA PINNACLE'
-    elif 'betfair' in host:
-        label = '🎯 ABRIR NA BETFAIR'
     else:
         label = '🎯 ABRIR APOSTA'
     return {'inline_keyboard': [[{'text': label, 'url': url}]]}

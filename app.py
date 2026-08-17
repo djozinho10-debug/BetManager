@@ -15,7 +15,7 @@ from src.db import add_bet, database_mode, database_source, delete_bet, get_bets
 from src.parser import image_to_text, parse_text
 from src.api_football import api_enabled, enrich_from_api, suggest_settlement
 from src.reports import group_report, kpis, prepare, combo_report, performance_alerts
-from src.telegram_dispatcher import configured as telegram_configured, dispatch_bet, dispatch_result, start_worker
+from src.telegram_dispatcher import configured as telegram_configured, dispatch_bet, dispatch_result, start_worker, extract_bet_link
 
 st.set_page_config(page_title='BetManager Cloud', page_icon='📊', layout='wide')
 init_db()
@@ -367,7 +367,7 @@ elif page == 'Importar aposta':
                 result=a.selectbox('Resultado',['PENDENTE','WIN','HALF WIN','VOID','HALF LOSS','LOSS'])
                 source_money=b.number_input('Valor em R$ do print (informativo)',min_value=0.0,value=float(p.get('source_stake_money',0.0)),step=1.0,disabled=True)
                 notes=st.text_area('Observações')
-                bet_link=st.text_input('🔗 Link da aposta/jogo (opcional)', value=p.get('bet_link','') or '', placeholder='https://www.bet365... ou https://www.betano...', help='Se preenchido, o Telegram mostra um botão para abrir diretamente o link. Aceita Bet365, Betano, Pinnacle, Betfair e outros links http/https.')
+                st.caption('🔗 Se quiser um botão no Telegram, cole o link da Bet365, Betano ou Bolsa diretamente em Observações.')
                 save=st.form_submit_button('💾 Salvar aposta',type='primary',use_container_width=True)
                 if save:
                     profit = units*(odds-1) if result=='WIN' else units*(odds-1)/2 if result=='HALF WIN' else -units/2 if result=='HALF LOSS' else -units if result=='LOSS' else 0.0
@@ -375,7 +375,7 @@ elif page == 'Importar aposta':
                         'user_name':bettor.strip() or st.session_state.user_name,'bet_date':str(bet_date),'bookmaker':bookmaker,'competition':competition,
                         'country':country,'event':event or 'Evento não informado','market':market,'selection':selection,'bet_type':bet_type,'timing':timing,
                         'odds':odds,'units':units,'source_stake_money':source_money,'result':result,'profit_units':profit,'notes':notes,
-                        'source_text':st.session_state.get('ocr_text',''),'bet_link':bet_link.strip()
+                        'source_text':st.session_state.get('ocr_text',''),'bet_link':extract_bet_link(notes)
                     })
                     data['game_time'] = datetime.combine(bet_date, game_clock).isoformat(timespec='minutes')
                     data['reminder_10m'] = 1 if reminder_10m else 0
@@ -457,9 +457,9 @@ elif page == 'Apostas':
                     eti=e2.selectbox('Momento',['Pré-jogo','Ao vivo'],index=1 if row.timing=='Ao vivo' else 0)
                     eo=e3.number_input('Odd',min_value=1.0,value=float(row.odds),step=.01); eun=e4.number_input('Unidades',min_value=.05,value=float(row.units),step=.25)
                     en=st.text_area('Observações',str(row.notes or ''))
-                    elink=st.text_input('🔗 Link da aposta/jogo',str(getattr(row,'bet_link','') or ''),help='Opcional. Se houver um link válido, o Telegram mostra o botão para abrir a aposta/jogo.')
+                    st.caption('🔗 Links em Observações são detectados automaticamente para o botão do Telegram.')
                     if st.form_submit_button('Salvar alterações',use_container_width=True):
-                        update_bet(int(bet_id),{'user_name':eu,'bet_date':str(ed),'bookmaker':eb,'competition':ec,'country':eco,'event':ee,'market':em,'selection':es,'bet_type':et,'timing':eti,'odds':eo,'units':eun,'notes':en,'bet_link':elink.strip()})
+                        update_bet(int(bet_id),{'user_name':eu,'bet_date':str(ed),'bookmaker':eb,'competition':ec,'country':eco,'event':ee,'market':em,'selection':es,'bet_type':et,'timing':eti,'odds':eo,'units':eun,'notes':en,'bet_link':extract_bet_link(en)})
                         st.success('Aposta atualizada.'); st.rerun()
             if st.button('🗑️ Excluir aposta selecionada'):
                 delete_bet(int(bet_id)); st.success('Aposta excluída.'); st.rerun()
