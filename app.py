@@ -351,7 +351,17 @@ elif page == 'Importar aposta':
                 odds=c.number_input('Odd',min_value=1.0,value=float(p.get('odds',1.0)),step=0.01)
                 units=d.number_input('Unidades (u)',min_value=0.05,value=float(p.get('units',1.0)),step=0.25,help='Padrão 1u. O valor em reais do print não entra no ROI.')
                 a,b=st.columns(2)
-                game_clock=a.time_input('Horário do jogo', value=time(20,0), help='Usado para o aviso automático 10 minutos antes.')
+                api_clock = time(20,0)
+                if p.get('_api_game_time_br'):
+                    try:
+                        api_clock = datetime.strptime(str(p.get('_api_game_time_br')), '%H:%M').time()
+                    except Exception:
+                        pass
+                game_clock=a.time_input(
+                    'Horário do jogo (Brasília)',
+                    value=api_clock,
+                    help='Quando a API-Football confirma a partida, o horário é preenchido automaticamente e convertido para America/Sao_Paulo.'
+                )
                 reminder_10m=b.checkbox('Avisar 10 min antes', value=True)
                 a,b=st.columns(2)
                 result=a.selectbox('Resultado',['PENDENTE','WIN','HALF WIN','VOID','HALF LOSS','LOSS'])
@@ -371,8 +381,28 @@ elif page == 'Importar aposta':
                     data['reminder_sent'] = 0
                     data['telegram_sent'] = 0
                     data['telegram_message_id'] = None
-                    add_bet(data)
-                    st.success(f'Aposta salva: {units:.2f}u para {data["user_name"]}.')
+                    bet_id = add_bet(data)
+
+                    # Novo fluxo: salvar = disparar. A aposta nunca é perdida se o
+                    # Telegram estiver momentaneamente indisponível; nesse caso ela
+                    # permanece como não enviada e pode ser reenviada pelo Disparador.
+                    telegram_ok = False
+                    telegram_error = None
+                    if telegram_configured():
+                        try:
+                            dispatch_bet(bet_id)
+                            telegram_ok = True
+                        except Exception as exc:
+                            telegram_error = f'{type(exc).__name__}: {exc}'
+
+                    if telegram_ok:
+                        st.success(f'✅ Aposta salva e sinal enviado ao Telegram: {units:.2f}u para {data["user_name"]}.')
+                    else:
+                        st.success(f'Aposta salva: {units:.2f}u para {data["user_name"]}.')
+                        if telegram_error:
+                            st.warning('A aposta foi salva, mas o Telegram não conseguiu enviar agora. Ela ficou disponível no Disparador para nova tentativa.')
+                        elif not telegram_configured():
+                            st.warning('Telegram não configurado; a aposta foi salva sem disparo.')
                     for key in ['parsed_bet','ocr_text','current_bet_image','last_image_token','read_error']:
                         st.session_state.pop(key, None)
     elif image is None:

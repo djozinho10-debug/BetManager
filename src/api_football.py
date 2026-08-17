@@ -1,7 +1,8 @@
 import os
 import re
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from difflib import SequenceMatcher
 import requests
 
@@ -113,6 +114,30 @@ def enrich_from_api(parsed, min_confidence=0.72):
     data["_api_confidence"] = round(best_score, 3)
     data["_api_status"] = f"API confirmou a partida ({best_score:.0%})"
     data["_api_day"] = best_day
+
+    # A API devolve o kickoff com referência de fuso (e também timestamp UTC).
+    # Normalizamos sempre para horário de Brasília (America/Sao_Paulo) sem fazer
+    # uma chamada extra à API, aproveitando a fixture que já foi encontrada.
+    try:
+        br_tz = ZoneInfo("America/Sao_Paulo")
+        kickoff = None
+        ts = fixture.get("timestamp")
+        if ts is not None:
+            kickoff = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(br_tz)
+        elif fixture.get("date"):
+            kickoff = datetime.fromisoformat(str(fixture.get("date")).replace("Z", "+00:00"))
+            if kickoff.tzinfo is None:
+                kickoff = kickoff.replace(tzinfo=timezone.utc)
+            kickoff = kickoff.astimezone(br_tz)
+        if kickoff:
+            data["bet_date"] = kickoff.date().isoformat()
+            data["_api_game_time_br"] = kickoff.strftime("%H:%M")
+            data["_api_game_datetime_br"] = kickoff.replace(tzinfo=None).isoformat(timespec="minutes")
+            data["_api_status"] += f" • início {kickoff.strftime('%d/%m às %H:%M')} (Brasília)"
+    except Exception:
+        # Se houver qualquer problema de conversão, a importação continua e o
+        # horário permanece editável manualmente na ficha.
+        pass
     return data
 
 
