@@ -4,7 +4,10 @@ import threading
 import time
 from datetime import datetime, timedelta
 import requests
+from urllib.parse import urlparse
 import streamlit as st
+from io import BytesIO
+from PIL import Image
 from sqlalchemy import text
 from src.db import ENGINE
 
@@ -29,14 +32,41 @@ def configured():
     return bool(token and chat)
 
 
-def send_message(message: str, chat_id: str | None = None):
+
+
+def _bet_button(row):
+    """Retorna inline keyboard para um link http/https cadastrado na aposta."""
+    url = str(row.get('bet_link') or '').strip()
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+            return None
+    except Exception:
+        return None
+
+    host = parsed.netloc.lower()
+    if 'bet365' in host:
+        label = '🎯 ABRIR NA BET365'
+    elif 'betano' in host:
+        label = '🎯 ABRIR NA BETANO'
+    elif 'pinnacle' in host:
+        label = '🎯 ABRIR NA PINNACLE'
+    elif 'betfair' in host:
+        label = '🎯 ABRIR NA BETFAIR'
+    else:
+        label = '🎯 ABRIR APOSTA'
+    return {'inline_keyboard': [[{'text': label, 'url': url}]]}
+
+def send_message(message: str, chat_id: str | None = None, reply_markup=None):
     token, default_chat = telegram_config()
     target = (chat_id or default_chat).strip()
     if not token or not target:
         raise RuntimeError('Configure TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID nos Secrets.')
     r = requests.post(
         f'https://api.telegram.org/bot{token}/sendMessage',
-        json={'chat_id': target, 'text': message, 'parse_mode': 'HTML', 'disable_web_page_preview': True},
+        json={**{'chat_id': target, 'text': message, 'parse_mode': 'HTML', 'disable_web_page_preview': True}, **({'reply_markup': reply_markup} if reply_markup else {})},
         timeout=15,
     )
     r.raise_for_status()
@@ -47,37 +77,54 @@ def send_message(message: str, chat_id: str | None = None):
 
 
 
-def send_photo_data_url(data_url: str, caption: str = '', reply_to_message_id=None, chat_id: str | None = None):
+def _image_bytes_from_data_url(data_url: str):
+    """Normaliza PNG/JPG/WEBP/etc para JPEG antes de enviar ao Telegram."""
+    if not data_url or ',' not in data_url:
+        raise RuntimeError('Print da aposta não encontrado na sessão.')
+    try:
+        _header, encoded = data_url.split(',', 1)
+        raw = base64.b64decode(encoded)
+        with Image.open(BytesIO(raw)) as img:
+            img = img.convert('RGB')
+            out = BytesIO()
+            img.save(out, format='JPEG', quality=92, optimize=True)
+            return out.getvalue()
+    except Exception as exc:
+        raise RuntimeError(f'Não consegui preparar o print para o Telegram: {exc}') from exc
+
+
+def send_photo_data_url(data_url: str, caption: str = '', reply_to_message_id=None, chat_id: str | None = None, reply_markup=None):
     """Envia ao Telegram o print original colado/enviado em Importar aposta."""
     token, default_chat = telegram_config()
     target = (chat_id or default_chat).strip()
     if not token or not target:
         raise RuntimeError('Configure TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID nos Secrets.')
-    if not data_url or ',' not in data_url:
-        return None
-    header, encoded = data_url.split(',', 1)
-    mime = 'image/jpeg' if 'jpeg' in header.lower() or 'jpg' in header.lower() else 'image/png'
-    ext = 'jpg' if mime == 'image/jpeg' else 'png'
-    raw = base64.b64decode(encoded)
+
+    raw = _image_bytes_from_data_url(data_url)
     data = {'chat_id': target}
     if caption:
         data['caption'] = caption[:1024]
         data['parse_mode'] = 'HTML'
+    if reply_markup:
+        data['reply_markup'] = __import__('json').dumps(reply_markup, ensure_ascii=False)
     if reply_to_message_id:
-        try:
-            data['reply_parameters'] = '{"message_id":%d}' % int(reply_to_message_id)
-        except Exception:
-            pass
+        # reply_to_message_id continua amplamente aceito pelo endpoint e evita
+        # incompatibilidades de serialização de reply_parameters em multipart.
+        data['reply_to_message_id'] = str(reply_to_message_id)
+        data['allow_sending_without_reply'] = 'true'
+
     r = requests.post(
         f'https://api.telegram.org/bot{token}/sendPhoto',
         data=data,
-        files={'photo': (f'aposta.{ext}', raw, mime)},
-        timeout=25,
+        files={'photo': ('aposta.jpg', raw, 'image/jpeg')},
+        timeout=30,
     )
-    r.raise_for_status()
-    payload = r.json()
-    if not payload.get('ok'):
-        raise RuntimeError(payload.get('description', 'Falha ao enviar print no Telegram'))
+    try:
+        payload = r.json()
+    except Exception:
+        payload = {}
+    if not r.ok or not payload.get('ok'):
+        raise RuntimeError(payload.get('description') or f'Falha ao enviar print no Telegram (HTTP {r.status_code})')
     return payload['result'].get('message_id')
 
 def format_bet(row, reminder=False):
@@ -102,13 +149,27 @@ def format_bet(row, reminder=False):
 
 
 def dispatch_bet(bet_id: int, image_data_url: str | None = None):
-    with ENGINE.begin() as conn:
+    # Primeiro busca os dados; chamadas de rede ficam fora da transação do banco.
+    with ENGINE.connect() as conn:
         row = conn.execute(text('SELECT * FROM bets WHERE id=:id'), {'id': bet_id}).mappings().first()
-        if not row: raise RuntimeError('Aposta não encontrada.')
-        mid = send_message(format_bet(dict(row)))
-        conn.execute(text('UPDATE bets SET telegram_sent=1, telegram_message_id=:mid WHERE id=:id'), {'mid': str(mid), 'id': bet_id})
-        if image_data_url:
-            send_photo_data_url(image_data_url, caption='📸 <b>Print original da entrada</b>', reply_to_message_id=mid)
+    if not row:
+        raise RuntimeError('Aposta não encontrada.')
+
+    formatted = format_bet(dict(row))
+
+    # Se a aposta veio de "Importar aposta", o sinal inteiro vai como legenda
+    # do próprio print. Assim não existe mais o cenário "texto chegou, foto não".
+    if image_data_url:
+        mid = send_photo_data_url(image_data_url, caption=formatted, reply_markup=_bet_button(dict(row)))
+    else:
+        mid = send_message(formatted, reply_markup=_bet_button(dict(row)))
+
+    # Só marca como enviada depois que Telegram confirmar a mensagem/foto.
+    with ENGINE.begin() as conn:
+        conn.execute(
+            text('UPDATE bets SET telegram_sent=1, telegram_message_id=:mid WHERE id=:id'),
+            {'mid': str(mid), 'id': bet_id},
+        )
     return mid
 
 
@@ -189,7 +250,7 @@ def _check_reminders():
         target = game_time - timedelta(minutes=10)
         if target <= now <= horizon and game_time > now:
             try:
-                send_message(format_bet(row, reminder=True))
+                send_message(format_bet(row, reminder=True), reply_markup=_bet_button(row))
                 with ENGINE.begin() as conn:
                     conn.execute(text('UPDATE bets SET reminder_sent=1 WHERE id=:id AND reminder_sent=0'), {'id': row['id']})
             except Exception:
