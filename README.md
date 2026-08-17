@@ -31,3 +31,13 @@ No Streamlit Cloud > App settings > Secrets, adicione:
 API_FOOTBALL_KEY = "SUA_CHAVE"
 
 O sistema usa o OCR primeiro. Se conseguir identificar os dois times, consulta a API-Football para confirmar o jogo, normalizar os nomes e preencher o campeonato automaticamente.
+
+## Disparador Telegram
+Nos Secrets do Streamlit, configure:
+```toml
+TELEGRAM_BOT_TOKEN = "token_do_bot"
+TELEGRAM_CHAT_ID = "-5329496686"
+```
+Ao cadastrar a aposta, informe o horário do jogo e mantenha **Avisar 10 min antes** marcado. No menu **📣 Disparador Telegram**, escolha a aposta e clique em **Disparar aposta no Telegram**.
+
+> Importante: o lembrete é executado pelo processo do app. Em hospedagens que colocam o app para dormir, como pode ocorrer no Streamlit Community Cloud, não há garantia de execução enquanto o processo estiver suspenso. Para operação 24/7, hospede o app/worker em um serviço que permaneça ativo.
