@@ -15,7 +15,7 @@ from src.db import add_bet, database_mode, database_source, delete_bet, get_bets
 from src.parser import image_to_text, parse_text
 from src.api_football import api_enabled, enrich_from_api, suggest_settlement
 from src.reports import group_report, kpis, prepare, combo_report, performance_alerts
-from src.telegram_dispatcher import configured as telegram_configured, dispatch_bet, start_worker
+from src.telegram_dispatcher import configured as telegram_configured, dispatch_bet, dispatch_result, start_worker
 
 st.set_page_config(page_title='BetManager Cloud', page_icon='📊', layout='wide')
 init_db()
@@ -381,6 +381,8 @@ elif page == 'Importar aposta':
                     data['reminder_sent'] = 0
                     data['telegram_sent'] = 0
                     data['telegram_message_id'] = None
+                    data['telegram_result'] = None
+                    data['telegram_result_message_id'] = None
                     bet_id = add_bet(data)
 
                     # Novo fluxo: salvar = disparar. A aposta nunca é perdida se o
@@ -390,7 +392,7 @@ elif page == 'Importar aposta':
                     telegram_error = None
                     if telegram_configured():
                         try:
-                            dispatch_bet(bet_id)
+                            dispatch_bet(bet_id, st.session_state.get('current_bet_image'))
                             telegram_ok = True
                         except Exception as exc:
                             telegram_error = f'{type(exc).__name__}: {exc}'
@@ -432,7 +434,16 @@ elif page == 'Apostas':
         else:
             c1,c2,c3=st.columns([1,1,2]); bet_id=c1.selectbox('Aposta #',view['id'].tolist()); result=c2.selectbox('Resultado',['WIN','HALF WIN','VOID','HALF LOSS','LOSS','PENDENTE'])
             if c3.button('Atualizar resultado',use_container_width=True):
-                update_result(int(bet_id),result); st.success('Resultado atualizado.'); st.rerun()
+                update_result(int(bet_id),result)
+                telegram_note = ''
+                if result != 'PENDENTE' and telegram_configured():
+                    try:
+                        dispatch_result(int(bet_id))
+                        telegram_note = ' Resultado enviado ao Telegram.'
+                    except Exception:
+                        telegram_note = ' Resultado salvo; o envio ao Telegram ficou pendente.'
+                st.success('Resultado atualizado.' + telegram_note)
+                st.rerun()
             row=df[df['id']==bet_id].iloc[0]
             with st.expander('✏️ Editar aposta selecionada'):
                 with st.form('edit_bet'):
@@ -484,6 +495,24 @@ elif page == '📣 Disparador Telegram':
                     st.rerun()
                 except Exception as exc:
                     st.error(f'Falha ao enviar: {exc}')
+
+        tg_result_col = df['telegram_result'] if 'telegram_result' in df.columns else pd.Series('', index=df.index)
+        settled_unsent = df[
+            df['result'].isin(['WIN','HALF WIN','VOID','HALF LOSS','LOSS']) &
+            df['telegram_sent'].fillna(0).astype(int).eq(1) &
+            (tg_result_col.fillna('').astype(str) != df['result'].fillna('').astype(str))
+        ].copy()
+        if not settled_unsent.empty:
+            st.markdown('### 📊 Resultados pendentes de envio')
+            settled_unsent['resumo_resultado'] = settled_unsent.apply(lambda r: f"#{r['id']} • {r['event']} • {r['result']}", axis=1)
+            rid = st.selectbox('Resultado para reenviar', settled_unsent['id'].tolist(), format_func=lambda x: settled_unsent.loc[settled_unsent['id'].eq(x),'resumo_resultado'].iloc[0], key='tg_result_retry')
+            if st.button('📤 Enviar resultado ao Telegram', use_container_width=True, disabled=not telegram_configured()):
+                try:
+                    dispatch_result(int(rid))
+                    st.success('Resultado enviado ao Telegram.')
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f'Falha ao enviar resultado: {exc}')
 
 elif page == 'Liquidação':
     st.subheader('Liquidação e pendências')
@@ -545,7 +574,14 @@ elif page == 'Liquidação':
                     st.warning('Escolha um resultado antes de confirmar.')
                 else:
                     update_result(int(bet_id),chosen)
-                    st.success(f'Aposta #{bet_id} liquidada como {chosen}.')
+                    telegram_note = ''
+                    if telegram_configured():
+                        try:
+                            dispatch_result(int(bet_id))
+                            telegram_note = ' Resultado enviado ao Telegram.'
+                        except Exception:
+                            telegram_note = ' Resultado salvo; o envio ao Telegram ficou pendente.'
+                    st.success(f'Aposta #{bet_id} liquidada como {chosen}.' + telegram_note)
                     st.session_state.pop('settlement_suggestion',None)
                     st.session_state.pop('settlement_bet_id',None)
                     st.rerun()
