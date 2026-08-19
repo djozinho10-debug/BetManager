@@ -25,21 +25,100 @@ def _norm(value):
     value = unicodedata.normalize("NFKD", str(value or ""))
     value = "".join(c for c in value if not unicodedata.combining(c))
     value = value.lower()
-    value = re.sub(r"\b(fc|cf|sc|ac|afc|club|de|do|da|the)\b", " ", value)
+    # Remove apenas sufixos/palavras muito comuns de clubes; preserva termos que
+    # podem diferenciar equipes (ex.: Union, City, United, Spartans).
+    value = re.sub(r"\b(fc|cf|sc|ac|afc|club|futbol|football|futebol)\b", " ", value)
     value = re.sub(r"[^a-z0-9]+", " ", value)
     return " ".join(value.split())
 
-def _sim(a, b):
-    a, b = _norm(a), _norm(b)
-    if not a or not b:
+
+def _strip_ocr_noise(value):
+    """Limpa rótulos de mercado que às vezes ficam colados ao nome do time."""
+    value = str(value or "").strip()
+    # Prefixos comuns observados nos prints.
+    patterns = [
+        r"^partida\s*[-:|]?\s*",
+        r"^(?:total\s+de\s+)?(?:gols?|chutes?|remates?|escanteios?|corners)\s*[-:|]?\s*",
+        r"^(?:time\s+da\s+casa|time\s+visitante)\s*[-:|]?\s*",
+        r"^(?:(?:mais|menos)\s+de|over|under)\s+\d+(?:[.,]\d+)?\s*",
+        r"^\d+(?:[.,]\d+)?\s*",
+    ]
+    previous = None
+    while value and value != previous:
+        previous = value
+        for pat in patterns:
+            value = re.sub(pat, "", value, flags=re.I).strip(" -:|•")
+    # Rodapés de bilhete colados ao visitante.
+    value = re.split(
+        r"\b(?:aposta|retornos?\s+potenciais?|valor|stake|odd|ganho|retorno|reutilizar\s+sele[cç][oõ]es)\b",
+        value,
+        maxsplit=1,
+        flags=re.I,
+    )[0]
+    return " ".join(value.split()).strip()
+
+
+def _token_score(a, b):
+    """Score tolerante a nomes abreviados: Philadelphia ~ Philadelphia Union."""
+    na, nb = _norm(_strip_ocr_noise(a)), _norm(_strip_ocr_noise(b))
+    if not na or not nb:
         return 0.0
-    ratio = SequenceMatcher(None, a, b).ratio()
-    containment = min(len(a), len(b)) / max(len(a), len(b)) if a in b or b in a else 0
-    return max(ratio, containment)
+
+    ratio = SequenceMatcher(None, na, nb).ratio()
+    ta, tb = na.split(), nb.split()
+    sa, sb = set(ta), set(tb)
+    common = sa & sb
+
+    # Cobertura do texto OCR e do nome oficial.
+    cov_a = len(common) / max(1, len(sa))
+    cov_b = len(common) / max(1, len(sb))
+    token = 0.72 * cov_a + 0.28 * cov_b
+
+    # Prefixo/substring exatos são muito úteis quando o print omite FC/Union/etc.
+    compact_a, compact_b = na.replace(" ", ""), nb.replace(" ", "")
+    partial = 0.0
+    if na in nb or nb in na:
+        shorter = min(len(compact_a), len(compact_b))
+        longer = max(len(compact_a), len(compact_b))
+        partial = 0.82 + 0.18 * (shorter / max(1, longer))
+
+    # Um token longo idêntico costuma ser um ótimo identificador do clube.
+    distinctive = 0.0
+    if common:
+        longest = max(len(x) for x in common)
+        if longest >= 8:
+            distinctive = 0.90 if cov_a >= 0.5 else 0.82
+        elif longest >= 5 and cov_a == 1.0:
+            distinctive = 0.84
+
+    return min(1.0, max(ratio, token, partial, distinctive))
+
+
+def _sim(a, b):
+    return _token_score(a, b)
+
 
 def _split_event(event):
-    parts = re.split(r"\s+x\s+", str(event or ""), flags=re.I)
-    return (parts[0].strip(), parts[1].strip()) if len(parts) == 2 else ("", "")
+    event = str(event or "").strip()
+    # Aceita x, X, ×, vs e versus.
+    parts = re.split(r"\s+(?:x|×|vs\.?|versus)\s+", event, maxsplit=1, flags=re.I)
+    if len(parts) != 2:
+        return "", ""
+    return _strip_ocr_noise(parts[0]), _strip_ocr_noise(parts[1])
+
+
+def _fixture_scores(home_ocr, away_ocr, item):
+    teams = item.get("teams", {})
+    home = (teams.get("home") or {}).get("name", "")
+    away = (teams.get("away") or {}).get("name", "")
+
+    h_h, a_a = _sim(home_ocr, home), _sim(away_ocr, away)
+    h_a, a_h = _sim(home_ocr, away), _sim(away_ocr, home)
+    normal = (h_h + a_a) / 2
+    swapped = (h_a + a_h) / 2
+    if normal >= swapped:
+        return normal, h_h, a_a, False
+    return swapped, h_a, a_h, True
 
 def _request_fixtures(day):
     key = _secret_key()
@@ -66,15 +145,16 @@ def enrich_from_api(parsed, min_confidence=0.72):
         data["_api_status"] = "Evento insuficiente para consultar API"
         return data
 
+    # Já devolve o evento limpo para a ficha, mesmo antes da confirmação.
+    data["event"] = f"{home_ocr} x {away_ocr}"
+
     try:
         base_date = datetime.strptime(str(data.get("bet_date")), "%Y-%m-%d").date()
     except Exception:
         base_date = datetime.utcnow().date()
 
-    best = None
-    best_score = 0.0
-    best_day = None
-
+    candidates = []
+    # Primeiro o dia informado. Só amplia para +/-1 se não houver match forte.
     for offset in (0, -1, 1):
         day = (base_date + timedelta(days=offset)).isoformat()
         try:
@@ -84,19 +164,41 @@ def enrich_from_api(parsed, min_confidence=0.72):
             return data
 
         for item in fixtures:
-            teams = item.get("teams", {})
-            home = (teams.get("home") or {}).get("name", "")
-            away = (teams.get("away") or {}).get("name", "")
-            normal = (_sim(home_ocr, home) + _sim(away_ocr, away)) / 2
-            swapped = (_sim(home_ocr, away) + _sim(away_ocr, home)) / 2
-            score = max(normal, swapped)
-            if score > best_score:
-                best_score, best, best_day = score, item, day
-        if best_score >= 0.88:
+            score, side1, side2, swapped = _fixture_scores(home_ocr, away_ocr, item)
+            candidates.append((score, min(side1, side2), side1, side2, item, day, swapped))
+
+        day_best = max((x[0] for x in candidates if x[5] == day), default=0.0)
+        if offset == 0 and day_best >= 0.90:
+            break
+        if offset == -1 and max((x[0] for x in candidates), default=0.0) >= 0.90:
             break
 
-    if not best or best_score < min_confidence:
-        data["_api_status"] = f"Partida não confirmada pela API ({best_score:.0%})"
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    if not candidates:
+        data["_api_status"] = "Partida não encontrada na API"
+        return data
+
+    best_score, best_min_side, side1, side2, best, best_day, swapped = candidates[0]
+    second_score = candidates[1][0] if len(candidates) > 1 else 0.0
+    margin = best_score - second_score
+
+    # Match inteligente:
+    # - score alto confirma direto;
+    # - score médio confirma quando AMBOS os times casam bem e o melhor
+    #   candidato se destaca do segundo colocado.
+    strong = best_score >= 0.84 and best_min_side >= 0.68
+    balanced = best_score >= min_confidence and best_min_side >= 0.72 and margin >= 0.025
+    very_clear_sides = side1 >= 0.82 and side2 >= 0.82 and best_score >= 0.78
+    confirmed = strong or balanced or very_clear_sides
+
+    data["_api_confidence"] = round(best_score, 3)
+    data["_api_side_scores"] = (round(side1, 3), round(side2, 3))
+
+    if not confirmed:
+        data["_api_status"] = (
+            f"Partida não confirmada pela API ({best_score:.0%})"
+            f" • times {side1:.0%}/{side2:.0%}"
+        )
         return data
 
     teams = best.get("teams", {})
@@ -112,12 +214,14 @@ def enrich_from_api(parsed, min_confidence=0.72):
     data["_api_country"] = data["country"]
     data["_api_fixture_id"] = fixture.get("id")
     data["_api_confidence"] = round(best_score, 3)
-    data["_api_status"] = f"API confirmou a partida ({best_score:.0%})"
+    data["_api_status"] = (
+        f"API confirmou a partida ({best_score:.0%})"
+        f" • times {side1:.0%}/{side2:.0%}"
+    )
     data["_api_day"] = best_day
 
-    # A API devolve o kickoff com referência de fuso (e também timestamp UTC).
-    # Normalizamos sempre para horário de Brasília (America/Sao_Paulo) sem fazer
-    # uma chamada extra à API, aproveitando a fixture que já foi encontrada.
+    # A API devolve kickoff com referência temporal. Normalizamos sempre para
+    # America/Sao_Paulo e reutilizamos a mesma fixture (sem chamada extra).
     try:
         br_tz = ZoneInfo("America/Sao_Paulo")
         kickoff = None
@@ -135,8 +239,6 @@ def enrich_from_api(parsed, min_confidence=0.72):
             data["_api_game_datetime_br"] = kickoff.replace(tzinfo=None).isoformat(timespec="minutes")
             data["_api_status"] += f" • início {kickoff.strftime('%d/%m às %H:%M')} (Brasília)"
     except Exception:
-        # Se houver qualquer problema de conversão, a importação continua e o
-        # horário permanece editável manualmente na ficha.
         pass
     return data
 

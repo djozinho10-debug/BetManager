@@ -128,7 +128,14 @@ def _clean_event_name(event):
         # "Mais de 2.5 1.70 Total de Gols Previano" -> "Previano".
         value=re.sub(r'^(?:(?:mais|menos)\s+de|over|under)\s+\d+(?:[.,]\d+)?\s*', '', value, flags=re.I)
         value=re.sub(r'^\d+(?:[.,]\d+)?\s*', '', value)
-        value=re.sub(r'^(?:total\s+de\s+gols?|gols?|chutes?|escanteios?)\s+', '', value, flags=re.I)
+        # Remove cabeçalhos de mercado colados ao time. Executa em camadas
+        # para casos como "Partida - Chutes Philadelphia".
+        previous=None
+        while value and value != previous:
+            previous=value
+            value=re.sub(r'^partida\s*[-:|]?\s*', '', value, flags=re.I)
+            value=re.sub(r'^(?:total\s+de\s+)?(?:gols?|chutes?|remates?|escanteios?|corners)\s*[-:|]?\s*', '', value, flags=re.I)
+            value=re.sub(r'^(?:time\s+da\s+casa|time\s+visitante)\s*[-:|]?\s*', '', value, flags=re.I)
         # pequenos artefatos OCR no começo, sem remover siglas de clube válidas
         value=re.sub(r'^(?:os|oe|o0|00)\s+', '', value, flags=re.I)
         return _clean_team_token(value)
