@@ -15,7 +15,7 @@ from src.db import add_bet, database_mode, database_source, delete_bet, get_bets
 from src.parser import image_to_text, parse_text
 from src.api_football import api_enabled, enrich_from_api, suggest_settlement
 from src.reports import group_report, kpis, prepare, combo_report, performance_alerts
-from src.telegram_dispatcher import configured as telegram_configured, dispatch_bet, dispatch_result, start_worker, extract_bet_link
+from src.telegram_dispatcher import configured as telegram_configured, dispatch_bet, dispatch_result, start_worker, extract_bet_link, normalize_image_data_url
 
 st.set_page_config(page_title='BetManager Cloud', page_icon='📊', layout='wide')
 init_db()
@@ -351,16 +351,18 @@ elif page == 'Importar aposta':
                 odds=c.number_input('Odd',min_value=1.0,value=float(p.get('odds',1.0)),step=0.01)
                 units=d.number_input('Unidades (u)',min_value=0.05,value=float(p.get('units',1.0)),step=0.25,help='Padrão 1u. O valor em reais do print não entra no ROI.')
                 a,b=st.columns(2)
-                api_clock = time(20,0)
+                # Não inventa horário quando a API não confirmou a partida.
+                # O campo fica vazio e pode ser preenchido manualmente.
+                api_clock = None
                 if p.get('_api_game_time_br'):
                     try:
                         api_clock = datetime.strptime(str(p.get('_api_game_time_br')), '%H:%M').time()
                     except Exception:
-                        pass
+                        api_clock = None
                 game_clock=a.time_input(
                     'Horário do jogo (Brasília)',
                     value=api_clock,
-                    help='Quando a API-Football confirma a partida, o horário é preenchido automaticamente e convertido para America/Sao_Paulo.'
+                    help='Quando a API-Football confirma a partida, o horário é preenchido automaticamente em America/Sao_Paulo. Se não confirmar, preencha manualmente.'
                 )
                 reminder_10m=b.checkbox('Avisar 10 min antes', value=True)
                 a,b=st.columns(2)
@@ -378,14 +380,22 @@ elif page == 'Importar aposta':
                         'source_text':st.session_state.get('ocr_text',''),'bet_link':extract_bet_link(notes),
                         'bet_image_data': st.session_state.get('current_bet_image')
                     })
-                    data['game_time'] = datetime.combine(bet_date, game_clock).isoformat(timespec='minutes')
-                    data['reminder_10m'] = 1 if reminder_10m else 0
+                    data['game_time'] = datetime.combine(bet_date, game_clock).isoformat(timespec='minutes') if game_clock else None
+                    data['reminder_10m'] = 1 if (reminder_10m and game_clock) else 0
+                    # Persiste o print para o lembrete de 10 min conseguir reenviá-lo
+                    # mesmo horas depois, quando a sessão do Streamlit já mudou.
+                    try:
+                        data['source_image'] = normalize_image_data_url(st.session_state.get('current_bet_image')) if st.session_state.get('current_bet_image') else None
+                    except Exception:
+                        data['source_image'] = None
                     data['reminder_sent'] = 0
                     data['telegram_sent'] = 0
                     data['telegram_message_id'] = None
                     data['telegram_result'] = None
                     data['telegram_result_message_id'] = None
                     bet_id = add_bet(data)
+                    if reminder_10m and not game_clock:
+                        st.warning('⏰ A partida não teve horário confirmado. A aposta foi salva sem lembrete de 10 minutos; preencha o horário manualmente para usar o aviso.')
 
                     # Novo fluxo: salvar = disparar. A aposta nunca é perdida se o
                     # Telegram estiver momentaneamente indisponível; nesse caso ela
