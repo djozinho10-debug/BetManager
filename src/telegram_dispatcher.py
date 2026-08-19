@@ -3,6 +3,7 @@ import base64
 import threading
 import time
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import requests
 import re
 from urllib.parse import urlparse
@@ -249,24 +250,79 @@ def dispatch_result(bet_id: int, force: bool = False):
         return mid
 
 def _check_reminders():
-    now = datetime.now()
-    horizon = now + timedelta(minutes=10, seconds=59)
+    # game_time é salvo como horário local de Brasília (sem offset).
+    # O Streamlit Cloud pode rodar em UTC, então nunca usamos datetime.now() puro.
+    br_tz = ZoneInfo('America/Sao_Paulo')
+    now_br = datetime.now(br_tz).replace(tzinfo=None)
+
     with ENGINE.connect() as conn:
-        rows = conn.execute(text("SELECT * FROM bets WHERE telegram_sent=1 AND reminder_10m=1 AND reminder_sent=0 AND game_time IS NOT NULL")).mappings().all()
+        rows = conn.execute(text(
+            "SELECT * FROM bets WHERE telegram_sent=1 AND reminder_10m=1 "
+            "AND reminder_sent=0 AND game_time IS NOT NULL"
+        )).mappings().all()
+
     for raw in rows:
         row = dict(raw)
         try:
-            game_time = datetime.fromisoformat(str(row['game_time']))
+            game_time = datetime.fromisoformat(str(row['game_time'])).replace(tzinfo=None)
         except Exception:
             continue
+
         target = game_time - timedelta(minutes=10)
-        if target <= now <= horizon and game_time > now:
-            try:
-                send_message(format_bet(row, reminder=True), reply_markup=_bet_button(row))
-                with ENGINE.begin() as conn:
-                    conn.execute(text('UPDATE bets SET reminder_sent=1 WHERE id=:id AND reminder_sent=0'), {'id': row['id']})
-            except Exception:
-                pass
+        # Janela curta: aceita até 2 minutos de atraso (worker/deploy), mas nunca
+        # antecipa o lembrete. Isso também evita reaproveitar apostas antigas.
+        if not (target <= now_br < target + timedelta(minutes=2) and game_time > now_br):
+            continue
+
+        # LOCK ATÔMICO: 0=pendente, 2=enviando, 1=enviado.
+        # Duas instâncias do Streamlit podem executar o worker ao mesmo tempo;
+        # apenas uma consegue trocar 0 -> 2 e fica autorizada a enviar.
+        with ENGINE.begin() as conn:
+            claimed = conn.execute(
+                text('UPDATE bets SET reminder_sent=2 WHERE id=:id AND reminder_sent=0'),
+                {'id': row['id']},
+            )
+            if claimed.rowcount != 1:
+                continue
+
+        try:
+            reply_to = row.get('telegram_message_id')
+            image_data = row.get('bet_image_data')
+            if image_data:
+                send_photo_data_url(
+                    image_data,
+                    caption=format_bet(row, reminder=True),
+                    reply_to_message_id=reply_to,
+                    reply_markup=_bet_button(row),
+                )
+            else:
+                # Fallback para apostas antigas, que não possuem print salvo.
+                token, default_chat = telegram_config()
+                payload = {
+                    'chat_id': default_chat,
+                    'text': format_bet(row, reminder=True),
+                    'parse_mode': 'HTML',
+                    'disable_web_page_preview': True,
+                }
+                if _bet_button(row):
+                    payload['reply_markup'] = _bet_button(row)
+                if reply_to:
+                    try:
+                        payload['reply_parameters'] = {'message_id': int(reply_to)}
+                    except Exception:
+                        pass
+                r = requests.post(f'https://api.telegram.org/bot{token}/sendMessage', json=payload, timeout=15)
+                r.raise_for_status()
+                data = r.json()
+                if not data.get('ok'):
+                    raise RuntimeError(data.get('description', 'Falha no Telegram'))
+
+            with ENGINE.begin() as conn:
+                conn.execute(text('UPDATE bets SET reminder_sent=1 WHERE id=:id'), {'id': row['id']})
+        except Exception:
+            # Libera para nova tentativa apenas se o envio falhar de verdade.
+            with ENGINE.begin() as conn:
+                conn.execute(text('UPDATE bets SET reminder_sent=0 WHERE id=:id AND reminder_sent=2'), {'id': row['id']})
 
 
 def _worker():

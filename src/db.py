@@ -123,6 +123,7 @@ def init_db():
                 "ALTER TABLE bets ADD COLUMN IF NOT EXISTS telegram_result VARCHAR(20)",
                 "ALTER TABLE bets ADD COLUMN IF NOT EXISTS telegram_result_message_id VARCHAR(80)",
                 "ALTER TABLE bets ADD COLUMN IF NOT EXISTS bet_link TEXT",
+                "ALTER TABLE bets ADD COLUMN IF NOT EXISTS bet_image_data TEXT",
             ]
             with ENGINE.begin() as conn:
                 for migration in migrations:
@@ -142,6 +143,7 @@ def init_db():
                 'telegram_result': 'VARCHAR(20)',
                 'telegram_result_message_id': 'VARCHAR(80)',
                 'bet_link': 'TEXT',
+                'bet_image_data': 'TEXT',
             }
             for col, definition in sqlite_columns.items():
                 if col not in existing:
@@ -158,7 +160,7 @@ def add_bet(data: dict):
         'user_name','bet_date','bookmaker','competition','country','event','market','selection',
         'bet_type','timing','odds','units','source_stake_money','result','profit_units','notes','source_text',
         'game_time','reminder_10m','reminder_sent','telegram_sent','telegram_message_id',
-        'telegram_result','telegram_result_message_id','bet_link'
+        'telegram_result','telegram_result_message_id','bet_link','bet_image_data'
     ]
     sql = text(f"INSERT INTO bets ({','.join(cols)}) VALUES ({','.join(':'+c for c in cols)})")
     params = {c: data.get(c) for c in cols}

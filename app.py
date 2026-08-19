@@ -366,8 +366,8 @@ elif page == 'Importar aposta':
                 a,b=st.columns(2)
                 result=a.selectbox('Resultado',['PENDENTE','WIN','HALF WIN','VOID','HALF LOSS','LOSS'])
                 source_money=b.number_input('Valor em R$ do print (informativo)',min_value=0.0,value=float(p.get('source_stake_money',0.0)),step=1.0,disabled=True)
-                notes=st.text_area('Observações')
-                st.caption('🔗 Se quiser um botão no Telegram, cole o link da Bet365, Betano ou Bolsa diretamente em Observações.')
+                notes=st.text_area('LINK', placeholder='Cole aqui o link da Bet365, Betano ou Bolsa')
+                st.caption('🔗 Cole aqui o link da aposta. Bet365, Betano e Bolsa são identificados automaticamente.')
                 save=st.form_submit_button('💾 Salvar aposta',type='primary',use_container_width=True)
                 if save:
                     profit = units*(odds-1) if result=='WIN' else units*(odds-1)/2 if result=='HALF WIN' else -units/2 if result=='HALF LOSS' else -units if result=='LOSS' else 0.0
@@ -375,7 +375,8 @@ elif page == 'Importar aposta':
                         'user_name':bettor.strip() or st.session_state.user_name,'bet_date':str(bet_date),'bookmaker':bookmaker,'competition':competition,
                         'country':country,'event':event or 'Evento não informado','market':market,'selection':selection,'bet_type':bet_type,'timing':timing,
                         'odds':odds,'units':units,'source_stake_money':source_money,'result':result,'profit_units':profit,'notes':notes,
-                        'source_text':st.session_state.get('ocr_text',''),'bet_link':extract_bet_link(notes)
+                        'source_text':st.session_state.get('ocr_text',''),'bet_link':extract_bet_link(notes),
+                        'bet_image_data': st.session_state.get('current_bet_image')
                     })
                     data['game_time'] = datetime.combine(bet_date, game_clock).isoformat(timespec='minutes')
                     data['reminder_10m'] = 1 if reminder_10m else 0

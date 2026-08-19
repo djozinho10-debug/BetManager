@@ -119,13 +119,27 @@ def _clean_team_token(name):
 def _clean_event_name(event):
     if not event:
         return event
+
+    def clean_side(value, is_home=False):
+        value=_clean_team_token(value)
+        # Corta textos típicos de rodapé do bilhete que o OCR cola ao visitante.
+        value=re.split(r'\b(?:aposta|retornos?\s+potenciais?|valor|stake|odd|ganho|retorno)\b', value, maxsplit=1, flags=re.I)[0]
+        # Remove resíduos de mercado/odd antes do mandante. Ex.:
+        # "Mais de 2.5 1.70 Total de Gols Previano" -> "Previano".
+        value=re.sub(r'^(?:(?:mais|menos)\s+de|over|under)\s+\d+(?:[.,]\d+)?\s*', '', value, flags=re.I)
+        value=re.sub(r'^\d+(?:[.,]\d+)?\s*', '', value)
+        value=re.sub(r'^(?:total\s+de\s+gols?|gols?|chutes?|escanteios?)\s+', '', value, flags=re.I)
+        # pequenos artefatos OCR no começo, sem remover siglas de clube válidas
+        value=re.sub(r'^(?:os|oe|o0|00)\s+', '', value, flags=re.I)
+        return _clean_team_token(value)
+
     parts=re.split(r'\s+x\s+',event,flags=re.I)
     if len(parts)==2:
-        home=_clean_team_token(parts[0])
-        away=_clean_team_token(parts[1])
+        home=clean_side(parts[0], True)
+        away=clean_side(parts[1], False)
         if home and away:
             return f"{home} x {away}"
-    return _clean_team_token(event)
+    return clean_side(event)
 
 def parse_text(text: str) -> dict:
     raw_lines=[_clean_line(x) for x in text.splitlines()]
