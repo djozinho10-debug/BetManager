@@ -362,7 +362,7 @@ elif page == 'Importar aposta':
                 odds=c.number_input('Odd',min_value=1.0,value=float(p.get('odds',1.0)),step=0.01)
                 units=d.number_input('Unidades (u)',min_value=0.05,value=float(p.get('units',1.0)),step=0.25,help='Padrão 1u. O valor em reais do print não entra no ROI.')
                 a,b=st.columns(2)
-                api_clock = time(20,0)
+                api_clock = None
                 if p.get('_api_game_time_br'):
                     try:
                         api_clock = datetime.strptime(str(p.get('_api_game_time_br')), '%H:%M').time()
@@ -389,8 +389,8 @@ elif page == 'Importar aposta':
                         'source_text':st.session_state.get('ocr_text',''),'bet_link':extract_bet_link(notes),
                         'bet_image_data': st.session_state.get('current_bet_image')
                     })
-                    data['game_time'] = datetime.combine(bet_date, game_clock).isoformat(timespec='minutes')
-                    data['reminder_10m'] = 1 if reminder_10m else 0
+                    data['game_time'] = datetime.combine(bet_date, game_clock).isoformat(timespec='minutes') if game_clock else None
+                    data['reminder_10m'] = 1 if (reminder_10m and game_clock) else 0
                     data['reminder_sent'] = 0
                     data['telegram_sent'] = 0
                     data['telegram_message_id'] = None

@@ -214,27 +214,47 @@ def parse_text(text: str) -> dict:
         else:
             market='Gols +/-'
 
-    # Times: primeiro tenta "A x B"; depois procura duas linhas com cara de nome de equipe.
+    # Times / evento. Casas como Bet365 podem exibir os clubes em duas
+    # linhas independentes, sem "x"/"vs". Priorizamos pares consecutivos
+    # após o cabeçalho do mercado e só depois usamos um fallback global.
     event=''
-    versus=re.search(r'([A-Za-zÀ-ÿ0-9 .\'\-]{2,60})\s+(?:x|vs\.?|v)\s+([A-Za-zÀ-ÿ0-9 .\'\-]{2,60})',clean,re.I)
+    versus=re.search(r"([A-Za-zÀ-ÿ0-9 .'\-]{2,60})\s+(?:x|vs\.?|v)\s+([A-Za-zÀ-ÿ0-9 .'\-]{2,60})",clean,re.I)
     if versus:
         event=f"{versus.group(1).strip()} x {versus.group(2).strip()}"
     else:
-        team_lines=[]
-        # Em bilhetes como o exemplo, as equipes vêm após a linha de mercado.
-        start=0
+        def team_candidate(line):
+            # Remove símbolos/logos que às vezes vêm no início da linha OCR.
+            value=re.sub(r"^[^A-Za-zÀ-ÿ0-9]+", "", line or '').strip()
+            return _clean_team_token(value) if _looks_like_team(value) else ''
+
+        market_headers=[]
         for i,line in enumerate(lines):
-            if re.search(r'gols?|chutes?|remates?|finaliza|escanteios|corners|handicap|resultado',line,re.I):
-                start=i+1
-        for line in lines[start:]:
-            if _looks_like_team(line):
-                # remove emojis/resíduos já tratados; não aceita linha de seleção
-                team_lines.append(line)
-            if len(team_lines)>=2: break
-        if len(team_lines)<2:
-            team_lines=[x for x in lines if _looks_like_team(x)]
-        if len(team_lines)>=2:
-            event=f"{team_lines[-2]} x {team_lines[-1]}"
+            if re.search(r'(?:partida\s*[-:|]?\s*)?(?:total\s+de\s+)?(?:gols?|chutes?|remates?|finaliza|escanteios|corners|handicap|resultado)', line, re.I):
+                market_headers.append(i)
+
+        # Tenta as linhas imediatamente posteriores a cada cabeçalho, do
+        # último para o primeiro. Isso evita confundir nome de mercado com time.
+        for header in reversed(market_headers):
+            candidates=[]
+            for line in lines[header+1:header+7]:
+                cand=team_candidate(line)
+                if cand:
+                    candidates.append(cand)
+                if len(candidates) >= 2:
+                    break
+            if len(candidates) >= 2:
+                event=f"{candidates[0]} x {candidates[1]}"
+                break
+
+        # Fallback: procura pares consecutivos com cara de clube em todo OCR.
+        if not event:
+            candidates=[]
+            for line in lines:
+                cand=team_candidate(line)
+                if cand:
+                    candidates.append(cand)
+            if len(candidates) >= 2:
+                event=f"{candidates[-2]} x {candidates[-1]}"
 
     # Stake em reais apenas informativa
     source_stake_money=0.0
