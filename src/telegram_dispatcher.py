@@ -106,6 +106,12 @@ def _image_bytes_from_data_url(data_url: str):
         raise RuntimeError(f'Não consegui preparar o print para o Telegram: {exc}') from exc
 
 
+def normalize_image_data_url(data_url: str) -> str:
+    """Converte o print para JPEG/base64 compacto para poder persistir no banco."""
+    raw = _image_bytes_from_data_url(data_url)
+    return 'data:image/jpeg;base64,' + base64.b64encode(raw).decode('ascii')
+
+
 def send_photo_data_url(data_url: str, caption: str = '', reply_to_message_id=None, chat_id: str | None = None, reply_markup=None):
     """Envia ao Telegram o print original colado/enviado em Importar aposta."""
     token, default_chat = telegram_config()
@@ -171,9 +177,11 @@ def dispatch_bet(bet_id: int, image_data_url: str | None = None):
     formatted = format_bet(dict(row))
 
     # Se a aposta veio de "Importar aposta", o sinal inteiro vai como legenda
-    # do próprio print. Assim não existe mais o cenário "texto chegou, foto não".
-    if image_data_url:
-        mid = send_photo_data_url(image_data_url, caption=formatted, reply_markup=_bet_button(dict(row)))
+    # do próprio print. Se a sessão já acabou, usa o print persistido no banco.
+    stored_image = str(row.get('source_image') or '').strip()
+    image_to_send = image_data_url or stored_image
+    if image_to_send:
+        mid = send_photo_data_url(image_to_send, caption=formatted, reply_markup=_bet_button(dict(row)))
     else:
         mid = send_message(formatted, reply_markup=_bet_button(dict(row)))
 
@@ -273,7 +281,14 @@ def _check_reminders():
         target = game_time - timedelta(minutes=10)
         if target <= now <= horizon and game_time > now:
             try:
-                send_message(format_bet(row, reminder=True), reply_markup=_bet_button(row))
+                # O lembrete reaproveita o print original salvo no banco e também
+                # o botão gerado pelo link encontrado em Observações.
+                reminder_text = format_bet(row, reminder=True)
+                stored_image = str(row.get('source_image') or '').strip()
+                if stored_image:
+                    send_photo_data_url(stored_image, caption=reminder_text, reply_markup=_bet_button(row))
+                else:
+                    send_message(reminder_text, reply_markup=_bet_button(row))
                 with ENGINE.begin() as conn:
                     conn.execute(text('UPDATE bets SET reminder_sent=1 WHERE id=:id AND reminder_sent=0'), {'id': row['id']})
             except Exception:
