@@ -106,12 +106,6 @@ def _image_bytes_from_data_url(data_url: str):
         raise RuntimeError(f'Não consegui preparar o print para o Telegram: {exc}') from exc
 
 
-def normalize_image_data_url(data_url: str) -> str:
-    """Converte o print para JPEG/base64 compacto para poder persistir no banco."""
-    raw = _image_bytes_from_data_url(data_url)
-    return 'data:image/jpeg;base64,' + base64.b64encode(raw).decode('ascii')
-
-
 def send_photo_data_url(data_url: str, caption: str = '', reply_to_message_id=None, chat_id: str | None = None, reply_markup=None):
     """Envia ao Telegram o print original colado/enviado em Importar aposta."""
     token, default_chat = telegram_config()
@@ -177,11 +171,9 @@ def dispatch_bet(bet_id: int, image_data_url: str | None = None):
     formatted = format_bet(dict(row))
 
     # Se a aposta veio de "Importar aposta", o sinal inteiro vai como legenda
-    # do próprio print. Se a sessão já acabou, usa o print persistido no banco.
-    stored_image = str(row.get('source_image') or '').strip()
-    image_to_send = image_data_url or stored_image
-    if image_to_send:
-        mid = send_photo_data_url(image_to_send, caption=formatted, reply_markup=_bet_button(dict(row)))
+    # do próprio print. Assim não existe mais o cenário "texto chegou, foto não".
+    if image_data_url:
+        mid = send_photo_data_url(image_data_url, caption=formatted, reply_markup=_bet_button(dict(row)))
     else:
         mid = send_message(formatted, reply_markup=_bet_button(dict(row)))
 
@@ -258,21 +250,11 @@ def dispatch_result(bet_id: int, force: bool = False):
         return mid
 
 def _check_reminders():
-<<<<<<< HEAD
     # game_time é salvo como horário local de Brasília (sem offset).
     # O Streamlit Cloud pode rodar em UTC, então nunca usamos datetime.now() puro.
     br_tz = ZoneInfo('America/Sao_Paulo')
     now_br = datetime.now(br_tz).replace(tzinfo=None)
 
-=======
-    # game_time é salvo como horário LOCAL de Brasília (sem offset).
-    # O Streamlit Cloud roda normalmente em UTC, portanto datetime.now() sem
-    # timezone fazia o lembrete disparar ~3h antes. Comparamos tudo explicitamente
-    # em America/Sao_Paulo para evitar diferença entre servidor e usuário.
-    br_tz = ZoneInfo("America/Sao_Paulo")
-    now = datetime.now(br_tz)
-    horizon = now + timedelta(minutes=10, seconds=59)
->>>>>>> 15b3d7fc0d882dbe55f51898ca73a5e860466f8e
     with ENGINE.connect() as conn:
         rows = conn.execute(text(
             "SELECT * FROM bets WHERE telegram_sent=1 AND reminder_10m=1 "
@@ -282,21 +264,11 @@ def _check_reminders():
     for raw in rows:
         row = dict(raw)
         try:
-<<<<<<< HEAD
             game_time = datetime.fromisoformat(str(row['game_time'])).replace(tzinfo=None)
-=======
-            game_time = datetime.fromisoformat(str(row['game_time']))
-            if game_time.tzinfo is None:
-                # Valores atuais do banco já representam hora de Brasília.
-                game_time = game_time.replace(tzinfo=br_tz)
-            else:
-                game_time = game_time.astimezone(br_tz)
->>>>>>> 15b3d7fc0d882dbe55f51898ca73a5e860466f8e
         except Exception:
             continue
 
         target = game_time - timedelta(minutes=10)
-<<<<<<< HEAD
         # Janela curta: aceita até 2 minutos de atraso (worker/deploy), mas nunca
         # antecipa o lembrete. Isso também evita reaproveitar apostas antigas.
         if not (target <= now_br < target + timedelta(minutes=2) and game_time > now_br):
@@ -351,22 +323,6 @@ def _check_reminders():
             # Libera para nova tentativa apenas se o envio falhar de verdade.
             with ENGINE.begin() as conn:
                 conn.execute(text('UPDATE bets SET reminder_sent=0 WHERE id=:id AND reminder_sent=2'), {'id': row['id']})
-=======
-        if target <= now <= horizon and game_time > now:
-            try:
-                # O lembrete reaproveita o print original salvo no banco e também
-                # o botão gerado pelo link encontrado em Observações.
-                reminder_text = format_bet(row, reminder=True)
-                stored_image = str(row.get('source_image') or '').strip()
-                if stored_image:
-                    send_photo_data_url(stored_image, caption=reminder_text, reply_markup=_bet_button(row))
-                else:
-                    send_message(reminder_text, reply_markup=_bet_button(row))
-                with ENGINE.begin() as conn:
-                    conn.execute(text('UPDATE bets SET reminder_sent=1 WHERE id=:id AND reminder_sent=0'), {'id': row['id']})
-            except Exception:
-                pass
->>>>>>> 15b3d7fc0d882dbe55f51898ca73a5e860466f8e
 
 
 def _worker():

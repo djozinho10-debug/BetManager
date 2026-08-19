@@ -116,39 +116,6 @@ def _clean_team_token(name):
     name=re.sub(r'\s+',' ',name).strip(' -|,.;:')
     return name
 
-def _strip_market_noise_from_team(name, side='home'):
-    """Remove resíduos de mercado/odd que o OCR pode colar junto do nome do time.
-
-    Ex.: "Mais de 2.5 1.80 Total de Gols AGMK" -> "AGMK".
-    A limpeza é deliberadamente conservadora para não cortar nomes normais de clubes.
-    """
-    value=_clean_line(name or '')
-    if not value:
-        return ''
-
-    # Remove preços/linhas isoladas nas extremidades.
-    value=re.sub(r'^\s*(?:mais de|menos de|over|under)\s+\d+(?:[.,]\d+)?\s*', '', value, flags=re.I)
-    value=re.sub(r'^\s*\d{1,2}[.,]\d{2,3}\s*', '', value)
-
-    # Em vários bilhetes o texto do mercado fica imediatamente antes do mandante.
-    # Mantemos somente o que vier depois do ÚLTIMO marcador reconhecido.
-    market_markers = [
-        r'total\s+de\s+gols?', r'gols?\s+totais?', r'total\s+goals?',
-        r'time\s+da\s+casa\s*-?\s*chutes?', r'time\s+visitante\s*-?\s*chutes?',
-        r'chutes?\s+no\s+alvo', r'chutes?', r'remates?', r'finaliza(?:ç|c)ões?',
-        r'escanteios?', r'corners?', r'handicap', r'resultado\s+final', r'ambas\s+marcam'
-    ]
-    for marker in market_markers:
-        matches=list(re.finditer(marker, value, flags=re.I))
-        if matches:
-            value=value[matches[-1].end():].strip(' -|:')
-
-    # Se ainda sobrou "Mais/Menos de X" ou uma odd antes do clube, tira só o prefixo.
-    value=re.sub(r'^\s*(?:mais de|menos de|over|under)\s+\d+(?:[.,]\d+)?\s*', '', value, flags=re.I)
-    value=re.sub(r'^\s*\d{1,2}[.,]\d{2,3}\s*', '', value)
-    return _clean_team_token(value)
-
-
 def _clean_event_name(event):
     if not event:
         return event
@@ -168,19 +135,11 @@ def _clean_event_name(event):
 
     parts=re.split(r'\s+x\s+',event,flags=re.I)
     if len(parts)==2:
-<<<<<<< HEAD
         home=clean_side(parts[0], True)
         away=clean_side(parts[1], False)
         if home and away:
             return f"{home} x {away}"
     return clean_side(event)
-=======
-        home=_strip_market_noise_from_team(parts[0], 'home')
-        away=_strip_market_noise_from_team(parts[1], 'away')
-        if home and away:
-            return f"{home} x {away}"
-    return _strip_market_noise_from_team(event)
->>>>>>> 15b3d7fc0d882dbe55f51898ca73a5e860466f8e
 
 def parse_text(text: str) -> dict:
     raw_lines=[_clean_line(x) for x in text.splitlines()]
