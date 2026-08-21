@@ -79,6 +79,20 @@ hr { border-color: rgba(255,255,255,.08) !important; }
 [data-testid="stSidebar"] [role="radiogroup"] label:hover {
     background: rgba(255,255,255,.05);
 }
+.bm-hero { display:flex; justify-content:space-between; align-items:center; padding:18px 20px; margin:4px 0 18px; border:1px solid rgba(255,255,255,.08); border-radius:16px; background:linear-gradient(135deg,rgba(22,31,43,.98),rgba(11,17,24,.98)); }
+.bm-eyebrow { font-size:.72rem; letter-spacing:.16em; opacity:.55; font-weight:700; }
+.bm-hero-title { font-size:2rem; font-weight:800; line-height:1.08; margin-top:3px; }
+.bm-hero-sub { opacity:.62; margin-top:7px; font-size:.9rem; }
+.bm-live-pill { font-size:.72rem; font-weight:800; letter-spacing:.08em; padding:7px 10px; border-radius:999px; border:1px solid rgba(80,220,130,.25); background:rgba(80,220,130,.08); color:#72e69d; }
+.bm-section-title { font-size:1.15rem; font-weight:800; margin:1.25rem 0 .65rem; }
+.bm-panel-title { font-size:.92rem; font-weight:750; opacity:.9; margin:.15rem 0 .65rem; }
+.bm-next-card { display:flex; align-items:center; gap:12px; padding:11px 12px; margin-bottom:8px; border:1px solid rgba(255,255,255,.07); border-radius:12px; background:rgba(255,255,255,.025); }
+.bm-next-time { min-width:58px; text-align:center; font-size:.75rem; opacity:.72; border-right:1px solid rgba(255,255,255,.08); padding-right:10px; }
+.bm-next-time strong { font-size:1rem; opacity:1; }
+.bm-next-main { flex:1; min-width:0; }
+.bm-next-main strong { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:.88rem; }
+.bm-next-main span { display:block; opacity:.58; font-size:.76rem; margin-top:2px; }
+.bm-next-user { font-size:.72rem; opacity:.55; }
 </style>
 ''', unsafe_allow_html=True)
 
@@ -157,144 +171,172 @@ if page == 'Dashboard':
     df = data_for_view()
     stats = kpis(df)
     scope = 'Todos os apostadores' if selected_view == 'TODOS' else selected_view
-    st.subheader(f'Dashboard — {scope}')
 
+    # Cabeçalho executivo
+    st.markdown(f"""
+    <div class="bm-hero">
+        <div>
+            <div class="bm-eyebrow">VISÃO GERAL</div>
+            <div class="bm-hero-title">Dashboard</div>
+            <div class="bm-hero-sub">{scope} • desempenho, agenda e risco em um só lugar</div>
+        </div>
+        <div class="bm-live-pill">● ONLINE</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # KPIs principais
     k1,k2,k3,k4,k5,k6 = st.columns(6)
-    k1.metric('Lucro', f"{stats['profit_units']:+.2f}u")
+    k1.metric('Lucro líquido', f"{stats['profit_units']:+.2f}u")
     k2.metric('ROI / Yield', f"{stats['roi']:.2f}%")
     k3.metric('Apostas', stats['bets'])
-    k4.metric('Unidades apostadas', f"{stats['units']:.2f}u")
+    k4.metric('Unidades', f"{stats['units']:.2f}u")
     k5.metric('Taxa de acerto', f"{stats['hit_rate']:.1f}%")
     k6.metric('Odd média', f"{stats['avg_odds']:.2f}")
 
-    k1,k2,k3,k4 = st.columns(4)
-    k1.metric('Drawdown máx.', f"{stats['drawdown']:.2f}u")
-    k2.metric('Pendentes', stats.get('pending', int((df['result']=='PENDENTE').sum()) if not df.empty else 0))
-    k3.metric('Melhor sequência', str(stats.get('best_streak',0)))
-    k4.metric('Pior sequência', str(stats.get('worst_streak',0)))
-
     d = prepare(df)
+    pending_count = int((df['result']=='PENDENTE').sum()) if not df.empty and 'result' in df.columns else 0
+    settled = d[d['result'].isin(['WIN','HALF WIN','VOID','HALF LOSS','LOSS'])].copy().sort_values(['bet_date','id']) if not d.empty else pd.DataFrame()
+
+    # Linha de contexto operacional
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric('Pendentes', stats.get('pending', pending_count))
+    c2.metric('Drawdown máx.', f"{stats['drawdown']:.2f}u")
+    c3.metric('Melhor sequência', str(stats.get('best_streak',0)))
+    c4.metric('Pior sequência', str(stats.get('worst_streak',0)))
+
     if d.empty:
         st.info('Ainda não há apostas cadastradas.')
     else:
-        settled = d[d['result'].isin(['WIN','HALF WIN','VOID','HALF LOSS','LOSS'])].copy().sort_values(['bet_date','id'])
+        # Agenda + curva de lucro
+        st.markdown('<div class="bm-section-title">Hoje e próximos jogos</div>', unsafe_allow_html=True)
+        left, right = st.columns([1.15, 1.85], gap='large')
 
-        st.markdown('### Evolução')
-        c1,c2 = st.columns([1.7,1])
-        with c1:
+        with left:
+            pending = d[d['result'].eq('PENDENTE')].copy()
+            if not pending.empty:
+                pending['_date_dt'] = pd.to_datetime(pending['bet_date'], errors='coerce')
+                pending['_time'] = pending.get('game_time', '').apply(format_game_time_br) if 'game_time' in pending.columns else ''
+                pending = pending.sort_values(['_date_dt','_time','id']).head(7)
+                st.markdown('<div class="bm-panel-title">⏱ Próximas entradas</div>', unsafe_allow_html=True)
+                for _, row in pending.iterrows():
+                    dt_txt = ''
+                    try:
+                        dt_txt = pd.to_datetime(row.get('bet_date')).strftime('%d/%m')
+                    except Exception:
+                        dt_txt = str(row.get('bet_date',''))
+                    tm = row.get('_time','') or '--:--'
+                    evt = str(row.get('event','—'))
+                    sel = str(row.get('selection','—'))
+                    usr = str(row.get('user_name',''))
+                    st.markdown(f"""
+                    <div class="bm-next-card">
+                        <div class="bm-next-time">{dt_txt}<br><strong>{tm}</strong></div>
+                        <div class="bm-next-main"><strong>{evt}</strong><span>{sel} • {row.get('odds',0):.2f}</span></div>
+                        <div class="bm-next-user">{usr}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.success('Nenhuma aposta pendente no momento.')
+
+        with right:
+            st.markdown('<div class="bm-panel-title">📈 Evolução do lucro</div>', unsafe_allow_html=True)
             if not settled.empty:
                 settled['lucro_acumulado_u'] = settled['profit_units'].cumsum()
-                fig_profit = px.area(settled,x='bet_date',y='lucro_acumulado_u',markers=True,title='Evolução do Lucro (U)')
+                fig_profit = px.area(settled, x='bet_date', y='lucro_acumulado_u', markers=True)
+                fig_profit.update_traces(line=dict(width=3), marker=dict(size=7))
                 fig_profit.update_layout(
-                    margin=dict(l=10,r=10,t=55,b=10),
-                    xaxis_title='Data',
+                    height=330,
+                    margin=dict(l=8,r=8,t=15,b=8),
+                    xaxis_title=None,
                     yaxis_title='Lucro acumulado (u)',
                     hovermode='x unified',
                     paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)'
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    showlegend=False,
+                    xaxis=dict(showgrid=False),
+                    yaxis=dict(gridcolor='rgba(255,255,255,.07)', zerolinecolor='rgba(255,255,255,.16)')
                 )
-                st.plotly_chart(fig_profit,use_container_width=True)
+                st.plotly_chart(fig_profit,use_container_width=True, config={'displayModeBar': False})
             else:
                 st.info('Sem apostas liquidadas para montar a curva de lucro.')
-        with c2:
+
+        # Performance visual
+        st.markdown('<div class="bm-section-title">Performance</div>', unsafe_allow_html=True)
+        c1,c2 = st.columns([1.15, 1.85], gap='large')
+        with c1:
+            st.markdown('<div class="bm-panel-title">🎯 Distribuição de resultados</div>', unsafe_allow_html=True)
             if not settled.empty:
                 result_order=['WIN','HALF WIN','VOID','HALF LOSS','LOSS']
                 rc=settled['result'].value_counts().reindex(result_order,fill_value=0).reset_index()
                 rc.columns=['Resultado','Quantidade']
-                fig_res = px.bar(rc,x='Resultado',y='Quantidade',title='Distribuição de resultados',text='Quantidade')
+                fig_res = px.bar(rc,x='Resultado',y='Quantidade',text='Quantidade')
                 fig_res.update_layout(
-                    margin=dict(l=10,r=10,t=55,b=10),
-                    xaxis_title='Resultado',
-                    yaxis_title='Quantidade',
+                    height=315,
+                    margin=dict(l=8,r=8,t=15,b=8),
+                    xaxis_title=None,
+                    yaxis_title=None,
                     paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)'
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    showlegend=False,
+                    xaxis=dict(showgrid=False),
+                    yaxis=dict(gridcolor='rgba(255,255,255,.07)')
                 )
-                st.plotly_chart(fig_res,use_container_width=True)
+                fig_res.update_traces(textposition='outside')
+                st.plotly_chart(fig_res,use_container_width=True, config={'displayModeBar': False})
+            else:
+                st.info('Ainda sem resultados liquidados.')
 
-        st.markdown('### Onde está o resultado')
-        c1,c2 = st.columns(2)
-        with c1:
+        with c2:
+            st.markdown('<div class="bm-panel-title">🏆 Melhores mercados</div>', unsafe_allow_html=True)
             mr = group_report(df,'market')
-            st.markdown('#### Mercados')
             if not mr.empty:
-                _mr = mr[['market','apostas','unidades','lucro_u','roi_%','odd_media']].head(8).rename(columns={
-                    'market':'Mercado','apostas':'Apostas','unidades':'Unidades','lucro_u':'Lucro (u)','roi_%':'ROI %','odd_media':'Odd média'
-                })
-                st.dataframe(_mr,hide_index=True,use_container_width=True)
-        with c2:
-            cr = group_report(df,'competition')
-            st.markdown('#### Campeonatos')
-            if not cr.empty:
-                _cr = cr[['competition','apostas','unidades','lucro_u','roi_%','odd_media']].head(8).rename(columns={
-                    'competition':'Campeonato','apostas':'Apostas','unidades':'Unidades','lucro_u':'Lucro (u)','roi_%':'ROI %','odd_media':'Odd média'
-                })
-                st.dataframe(_cr,hide_index=True,use_container_width=True)
+                top = mr[['market','apostas','lucro_u','roi_%','odd_media']].head(7).copy()
+                top = top.rename(columns={'market':'Mercado','apostas':'Apostas','lucro_u':'Lucro (u)','roi_%':'ROI %','odd_media':'Odd média'})
+                st.dataframe(top, hide_index=True, use_container_width=True, height=315)
+            else:
+                st.info('Sem dados suficientes por mercado.')
 
-        c1,c2 = st.columns(2)
+        # Rankings e insights
+        c1,c2 = st.columns(2, gap='large')
         with c1:
-            orp = group_report(df,'odd_band')
-            st.markdown('#### Faixas de odd')
-            if not orp.empty:
-                _orp = orp[['odd_band','apostas','lucro_u','roi_%','odd_media']].head(8).rename(columns={
-                    'odd_band':'Faixa de odd','apostas':'Apostas','lucro_u':'Lucro (u)','roi_%':'ROI %','odd_media':'Odd média'
-                })
-                st.dataframe(_orp,hide_index=True,use_container_width=True)
-        with c2:
-            tr = group_report(df,'timing')
-            st.markdown('#### Pré-jogo x Ao vivo')
-            if not tr.empty:
-                _tr = tr[['timing','apostas','lucro_u','roi_%','odd_media']].rename(columns={
-                    'timing':'Momento','apostas':'Apostas','lucro_u':'Lucro (u)','roi_%':'ROI %','odd_media':'Odd média'
-                })
-                st.dataframe(_tr,hide_index=True,use_container_width=True)
-
-        st.markdown('### Insights rápidos')
-        insights=[]
-        if not settled.empty:
-            if stats['roi'] > 0:
-                insights.append(f"🟢 ROI geral positivo em **{stats['roi']:.2f}%**.")
-            elif stats['roi'] < 0:
-                insights.append(f"🔴 ROI geral negativo em **{stats['roi']:.2f}%**.")
-            if stats['drawdown'] < 0:
-                insights.append(f"⚠️ Drawdown máximo de **{stats['drawdown']:.2f}u**.")
-            if not mr.empty:
-                best=mr.iloc[0]
-                worst=mr.sort_values('lucro_u').iloc[0]
-                insights.append(f"🔥 Melhor mercado: **{best['market']}** ({best['lucro_u']:+.2f}u | ROI {best['roi_%']:.2f}%).")
-                if worst['lucro_u'] < 0:
-                    insights.append(f"📉 Mercado com maior perda: **{worst['market']}** ({worst['lucro_u']:+.2f}u | ROI {worst['roi_%']:.2f}%).")
+            cr = group_report(df,'competition')
+            st.markdown('<div class="bm-panel-title">🌍 Campeonatos em destaque</div>', unsafe_allow_html=True)
             if not cr.empty:
-                bestc=cr.iloc[0]
-                insights.append(f"🏆 Melhor campeonato: **{bestc['competition']}** ({bestc['lucro_u']:+.2f}u).")
+                _cr = cr[['competition','apostas','lucro_u','roi_%']].head(7).rename(columns={
+                    'competition':'Campeonato','apostas':'Apostas','lucro_u':'Lucro (u)','roi_%':'ROI %'
+                })
+                st.dataframe(_cr,hide_index=True,use_container_width=True,height=300)
+        with c2:
+            st.markdown('<div class="bm-panel-title">💡 Insights rápidos</div>', unsafe_allow_html=True)
+            insights=[]
             if not settled.empty:
-                _daily = settled.copy()
-                _daily['_dia'] = pd.to_datetime(_daily['bet_date'], errors='coerce').dt.date
-                _daily = _daily.groupby('_dia', as_index=False)['profit_units'].sum()
-                if not _daily.empty:
-                    _bestday = _daily.loc[_daily['profit_units'].idxmax()]
-                    _worstday = _daily.loc[_daily['profit_units'].idxmin()]
-                    insights.append(f"📈 Melhor dia: **{_bestday['_dia']}** ({_bestday['profit_units']:+.2f}u).")
-                    if _worstday['profit_units'] < 0:
-                        insights.append(f"📉 Pior dia: **{_worstday['_dia']}** ({_worstday['profit_units']:+.2f}u).")
-            pend = int((d['result']=='PENDENTE').sum())
-            if pend:
-                insights.append(f"⏳ Existem **{pend} apostas pendentes** para liquidar.")
-        if insights:
-            cols = st.columns(min(3, len(insights[:6])))
-            for i, item in enumerate(insights[:6]):
-                with cols[i % len(cols)]:
-                    st.markdown(
-                        f"<div class='bm-insight'>{item}</div>",
-                        unsafe_allow_html=True
-                    )
-        else:
-            st.caption('Os insights aparecerão conforme as apostas forem sendo liquidadas.')
+                if stats['roi'] > 0:
+                    insights.append(f"🟢 ROI geral em **{stats['roi']:.2f}%**.")
+                elif stats['roi'] < 0:
+                    insights.append(f"🔴 ROI geral em **{stats['roi']:.2f}%**.")
+                if stats['drawdown'] < 0:
+                    insights.append(f"⚠️ Drawdown máximo de **{stats['drawdown']:.2f}u**.")
+                if not mr.empty:
+                    best=mr.iloc[0]
+                    worst=mr.sort_values('lucro_u').iloc[0]
+                    insights.append(f"🔥 Melhor mercado: **{best['market']}** ({best['lucro_u']:+.2f}u).")
+                    if worst['lucro_u'] < 0:
+                        insights.append(f"📉 Atenção em **{worst['market']}** ({worst['lucro_u']:+.2f}u).")
+                if pending_count:
+                    insights.append(f"⏳ **{pending_count}** aposta(s) aguardando resultado.")
+            for item in insights[:5]:
+                st.markdown(f"<div class='bm-insight'>{item}</div>", unsafe_allow_html=True)
+            if not insights:
+                st.caption('Os insights aparecerão conforme houver apostas liquidadas.')
 
         if selected_view == 'TODOS':
             ur = group_report(df,'user_name')
             if not ur.empty:
-                st.markdown('### Ranking por apostador')
-                st.dataframe(ur[['user_name','apostas','unidades','lucro_u','roi_%','odd_media']],hide_index=True,use_container_width=True)
+                st.markdown('<div class="bm-section-title">Ranking por apostador</div>', unsafe_allow_html=True)
+                rank = ur[['user_name','apostas','unidades','lucro_u','roi_%','odd_media']].rename(columns={
+                    'user_name':'Apostador','apostas':'Apostas','unidades':'Unidades','lucro_u':'Lucro (u)','roi_%':'ROI %','odd_media':'Odd média'
+                })
+                st.dataframe(rank,hide_index=True,use_container_width=True)
 
 elif page == 'Importar aposta':
     st.info(f'Aposta vinculada a **{st.session_state.user_name}**. O valor em R$ do bilhete não é usado no desempenho: o padrão é **1u**.')
