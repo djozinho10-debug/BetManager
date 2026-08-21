@@ -148,6 +148,49 @@ def format_game_time_br(value):
     return text_value
 
 
+
+
+def game_datetime_br(row):
+    """Retorna o início real da partida como datetime timezone-aware em Brasília.
+
+    Prioriza a data/hora completa salva em game_time. Para registros legados em
+    que game_time contém apenas HH:MM, combina com bet_date. Sem horário
+    confiável, retorna None para não incluir a aposta na Central do Dia.
+    """
+    from zoneinfo import ZoneInfo
+    br = ZoneInfo('America/Sao_Paulo')
+    value = row.get('game_time') if hasattr(row, 'get') else None
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    text_value = str(value).strip()
+    if not text_value or text_value.lower() in {'none', 'nan', 'nat'}:
+        return None
+    try:
+        # ISO completo: a data embutida em game_time é a data real da partida.
+        dt = pd.to_datetime(text_value, errors='coerce')
+        if not pd.isna(dt) and ('T' in text_value or ' ' in text_value or len(text_value) > 8):
+            py = dt.to_pydatetime()
+            if py.tzinfo is None:
+                return py.replace(tzinfo=br)
+            return py.astimezone(br)
+    except Exception:
+        pass
+    # Compatibilidade com bases antigas que salvaram só HH:MM.
+    import re
+    m = re.search(r'(?<!\d)([01]\d|2[0-3]):([0-5]\d)(?!\d)', text_value)
+    if not m:
+        return None
+    try:
+        bet_day = pd.to_datetime(row.get('bet_date'), errors='coerce')
+        if pd.isna(bet_day):
+            return None
+        return datetime.combine(
+            bet_day.date(),
+            time(int(m.group(1)), int(m.group(2)))
+        ).replace(tzinfo=br)
+    except Exception:
+        return None
+
 def image_from_data_url(data_url: str):
     raw = data_url.split(',', 1)[1]
     return Image.open(io.BytesIO(base64.b64decode(raw))).convert('RGB')
@@ -216,11 +259,16 @@ if page == 'Dashboard':
             now_br = datetime.now(ZoneInfo('America/Sao_Paulo'))
             today_br = now_br.date()
             pending = d[d['result'].eq('PENDENTE')].copy()
-            pending['_date_dt'] = pd.to_datetime(pending['bet_date'], errors='coerce') if not pending.empty else pd.NaT
-            today_pending = pending[pending['_date_dt'].dt.date.eq(today_br)].copy() if not pending.empty else pending
+            if not pending.empty:
+                # A Central do Dia usa a DATA REAL DO JOGO, nunca a data de cadastro.
+                pending['_game_dt_br'] = pending.apply(game_datetime_br, axis=1)
+                pending['_game_date_br'] = pending['_game_dt_br'].apply(lambda x: x.date() if x is not None else None)
+                pending['_time'] = pending['_game_dt_br'].apply(lambda x: x.strftime('%H:%M') if x is not None else '')
+                today_pending = pending[pending['_game_date_br'].eq(today_br)].copy()
+            else:
+                today_pending = pending
             if not today_pending.empty:
-                today_pending['_time'] = today_pending.get('game_time', '').apply(format_game_time_br) if 'game_time' in today_pending.columns else ''
-                today_pending = today_pending.sort_values(['_time','id'])
+                today_pending = today_pending.sort_values(['_game_dt_br','id'])
                 st.markdown(f'<div class="bm-panel-title">Hoje • {len(today_pending)} entrada(s) pendente(s)</div>', unsafe_allow_html=True)
                 for _, row in today_pending.iterrows():
                     tm = row.get('_time','') or '--:--'
@@ -246,7 +294,7 @@ if page == 'Dashboard':
             else:
                 st.success('Nenhuma aposta pendente para hoje.')
 
-            future = pending[pending['_date_dt'].dt.date.gt(today_br)].copy() if not pending.empty else pending
+            future = pending[pending['_game_date_br'].apply(lambda x: x is not None and x > today_br)].copy() if not pending.empty else pending
             if not future.empty:
                 st.caption(f'Próximos dias: {len(future)} aposta(s) pendente(s).')
 
