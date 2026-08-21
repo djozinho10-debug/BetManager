@@ -445,51 +445,73 @@ elif page == 'Apostas':
         if view.empty:
             st.warning('Nenhuma aposta encontrada com esses filtros.')
         else:
-            # Resultado editável diretamente na tabela. Todas as demais colunas ficam bloqueadas.
-            original_table = view[cols].copy()
-            edited_table = st.data_editor(
-                original_table,
-                hide_index=True,
-                use_container_width=True,
-                key='bets_result_editor',
-                disabled=[c for c in cols if c != 'result'],
-                column_config={
-                    'result': st.column_config.SelectboxColumn(
-                        'result',
-                        options=['PENDENTE','WIN','HALF WIN','VOID','HALF LOSS','LOSS'],
-                        required=True,
-                        help='Clique no status e escolha o novo resultado. A alteração é salva automaticamente.'
-                    )
-                },
-            )
+            # Separa apostas em aberto das já liquidadas para facilitar o trabalho diário.
+            pending_view = view[view['result'].fillna('PENDENTE').astype(str).str.upper().eq('PENDENTE')].copy()
+            settled_view = view[~view['result'].fillna('PENDENTE').astype(str).str.upper().eq('PENDENTE')].copy()
 
-            # Persiste automaticamente qualquer status alterado na própria linha.
-            original_results = {
-                int(r['id']): str(r['result'] or 'PENDENTE').upper()
-                for _, r in original_table[['id','result']].iterrows()
-            }
-            changed_results = []
-            for _, edited_row in edited_table[['id','result']].iterrows():
-                current_id = int(edited_row['id'])
-                new_result = str(edited_row['result'] or 'PENDENTE').upper()
-                if original_results.get(current_id) != new_result:
-                    update_result(current_id, new_result)
-                    telegram_note = ''
-                    if new_result != 'PENDENTE' and telegram_configured():
-                        try:
-                            dispatch_result(current_id)
-                            telegram_note = ' + Telegram'
-                        except Exception:
-                            telegram_note = ' (Telegram pendente)'
-                    changed_results.append(f'#{current_id}: {new_result}{telegram_note}')
+            def render_result_editor(table_df, editor_key):
+                if table_df.empty:
+                    return []
+                original_table = table_df[cols].copy()
+                edited_table = st.data_editor(
+                    original_table,
+                    hide_index=True,
+                    use_container_width=True,
+                    key=editor_key,
+                    disabled=[c for c in cols if c != 'result'],
+                    column_config={
+                        'result': st.column_config.SelectboxColumn(
+                            'result',
+                            options=['PENDENTE','WIN','HALF WIN','VOID','HALF LOSS','LOSS'],
+                            required=True,
+                            help='Clique no status e escolha o novo resultado. A alteração é salva automaticamente.'
+                        )
+                    },
+                )
 
+                original_results = {
+                    int(r['id']): str(r['result'] or 'PENDENTE').upper()
+                    for _, r in original_table[['id','result']].iterrows()
+                }
+                changes = []
+                for _, edited_row in edited_table[['id','result']].iterrows():
+                    current_id = int(edited_row['id'])
+                    new_result = str(edited_row['result'] or 'PENDENTE').upper()
+                    if original_results.get(current_id) != new_result:
+                        update_result(current_id, new_result)
+                        telegram_note = ''
+                        if new_result != 'PENDENTE' and telegram_configured():
+                            try:
+                                dispatch_result(current_id)
+                                telegram_note = ' + Telegram'
+                            except Exception:
+                                telegram_note = ' (Telegram pendente)'
+                        changes.append(f'#{current_id}: {new_result}{telegram_note}')
+                return changes
+
+            st.markdown(f'### ⏳ Apostas pendentes ({len(pending_view)})')
+            if pending_view.empty:
+                st.success('Nenhuma aposta pendente com os filtros atuais.')
+                pending_changes = []
+            else:
+                pending_changes = render_result_editor(pending_view, 'bets_result_editor_pending')
+
+            st.markdown(f'### ✅ Apostas finalizadas ({len(settled_view)})')
+            if settled_view.empty:
+                st.info('Nenhuma aposta finalizada com os filtros atuais.')
+                settled_changes = []
+            else:
+                settled_changes = render_result_editor(settled_view, 'bets_result_editor_settled')
+
+            changed_results = pending_changes + settled_changes
             if changed_results:
                 st.toast('✅ Resultado atualizado: ' + ', '.join(changed_results), icon='✅')
-                # Limpa o estado do editor para recarregar lucro/status já recalculados do banco.
-                st.session_state.pop('bets_result_editor', None)
+                # Limpa os dois editores para mover a aposta imediatamente entre as seções.
+                st.session_state.pop('bets_result_editor_pending', None)
+                st.session_state.pop('bets_result_editor_settled', None)
                 st.rerun()
 
-            st.caption('💡 Para atualizar uma aposta, clique diretamente na coluna **result** da linha desejada.')
+            st.caption('💡 Altere o **result** diretamente na linha. Ao liquidar uma aposta pendente, ela passa automaticamente para **Apostas finalizadas**.')
             bet_id=st.selectbox('Aposta para editar/excluir',view['id'].tolist())
             row=df[df['id']==bet_id].iloc[0]
             with st.expander('✏️ Editar aposta selecionada'):
