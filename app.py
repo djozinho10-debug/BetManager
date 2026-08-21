@@ -112,6 +112,28 @@ def data_for_view():
     return get_bets(None if selected_view == 'TODOS' else selected_view)
 
 
+def format_game_time_br(value):
+    """Exibe apenas HH:MM para o horário já salvo em Brasília."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ''
+    text_value = str(value).strip()
+    if not text_value or text_value.lower() in {'none', 'nan', 'nat'}:
+        return ''
+    try:
+        dt = pd.to_datetime(text_value, errors='coerce')
+        if not pd.isna(dt):
+            return dt.strftime('%H:%M')
+    except Exception:
+        pass
+    # Compatibilidade com registros antigos que tenham somente HH:MM.
+    if len(text_value) >= 5 and ':' in text_value:
+        import re
+        m = re.search(r'(?<!\d)([01]\d|2[0-3]):[0-5]\d(?!\d)', text_value)
+        if m:
+            return m.group(0)
+    return text_value
+
+
 def image_from_data_url(data_url: str):
     raw = data_url.split(',', 1)[1]
     return Image.open(io.BytesIO(base64.b64decode(raw))).convert('RGB')
@@ -441,7 +463,12 @@ elif page == 'Apostas':
         if res: view=view[view['result'].isin(res)]
         if markets: view=view[view['market'].isin(markets)]
         if books: view=view[view['bookmaker'].isin(books)]
-        cols=['id','user_name','bet_date','bookmaker','competition','event','market','selection','odds','units','result','profit_units']
+        # Horário do jogo visível diretamente no histórico (horário de Brasília).
+        if 'game_time' in view.columns:
+            view['horario_jogo'] = view['game_time'].apply(format_game_time_br)
+        else:
+            view['horario_jogo'] = ''
+        cols=['id','user_name','bet_date','horario_jogo','bookmaker','competition','event','market','selection','odds','units','result','profit_units']
         if view.empty:
             st.warning('Nenhuma aposta encontrada com esses filtros.')
         else:
@@ -460,6 +487,10 @@ elif page == 'Apostas':
                     key=editor_key,
                     disabled=[c for c in cols if c != 'result'],
                     column_config={
+                        'horario_jogo': st.column_config.TextColumn(
+                            'Horário',
+                            help='Horário de início do jogo em Brasília.'
+                        ),
                         'result': st.column_config.SelectboxColumn(
                             'result',
                             options=['PENDENTE','WIN','HALF WIN','VOID','HALF LOSS','LOSS'],
