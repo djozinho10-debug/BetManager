@@ -362,7 +362,7 @@ elif page == 'Importar aposta':
                 odds=c.number_input('Odd',min_value=1.0,value=float(p.get('odds',1.0)),step=0.01)
                 units=d.number_input('Unidades (u)',min_value=0.05,value=float(p.get('units',1.0)),step=0.25,help='Padrão 1u. O valor em reais do print não entra no ROI.')
                 a,b=st.columns(2)
-                api_clock = time(20,0)
+                api_clock = None
                 if p.get('_api_game_time_br'):
                     try:
                         api_clock = datetime.strptime(str(p.get('_api_game_time_br')), '%H:%M').time()
@@ -389,8 +389,8 @@ elif page == 'Importar aposta':
                         'source_text':st.session_state.get('ocr_text',''),'bet_link':extract_bet_link(notes),
                         'bet_image_data': st.session_state.get('current_bet_image')
                     })
-                    data['game_time'] = datetime.combine(bet_date, game_clock).isoformat(timespec='minutes')
-                    data['reminder_10m'] = 1 if reminder_10m else 0
+                    data['game_time'] = datetime.combine(bet_date, game_clock).isoformat(timespec='minutes') if game_clock else None
+                    data['reminder_10m'] = 1 if (reminder_10m and game_clock) else 0
                     data['reminder_sent'] = 0
                     data['telegram_sent'] = 0
                     data['telegram_message_id'] = None
@@ -442,21 +442,55 @@ elif page == 'Apostas':
         if markets: view=view[view['market'].isin(markets)]
         if books: view=view[view['bookmaker'].isin(books)]
         cols=['id','user_name','bet_date','bookmaker','competition','event','market','selection','odds','units','result','profit_units']
-        st.dataframe(view[cols],hide_index=True,use_container_width=True)
-        if view.empty: st.warning('Nenhuma aposta encontrada com esses filtros.')
+        if view.empty:
+            st.warning('Nenhuma aposta encontrada com esses filtros.')
         else:
-            c1,c2,c3=st.columns([1,1,2]); bet_id=c1.selectbox('Aposta #',view['id'].tolist()); result=c2.selectbox('Resultado',['WIN','HALF WIN','VOID','HALF LOSS','LOSS','PENDENTE'])
-            if c3.button('Atualizar resultado',use_container_width=True):
-                update_result(int(bet_id),result)
-                telegram_note = ''
-                if result != 'PENDENTE' and telegram_configured():
-                    try:
-                        dispatch_result(int(bet_id))
-                        telegram_note = ' Resultado enviado ao Telegram.'
-                    except Exception:
-                        telegram_note = ' Resultado salvo; o envio ao Telegram ficou pendente.'
-                st.success('Resultado atualizado.' + telegram_note)
+            # Resultado editável diretamente na tabela. Todas as demais colunas ficam bloqueadas.
+            original_table = view[cols].copy()
+            edited_table = st.data_editor(
+                original_table,
+                hide_index=True,
+                use_container_width=True,
+                key='bets_result_editor',
+                disabled=[c for c in cols if c != 'result'],
+                column_config={
+                    'result': st.column_config.SelectboxColumn(
+                        'result',
+                        options=['PENDENTE','WIN','HALF WIN','VOID','HALF LOSS','LOSS'],
+                        required=True,
+                        help='Clique no status e escolha o novo resultado. A alteração é salva automaticamente.'
+                    )
+                },
+            )
+
+            # Persiste automaticamente qualquer status alterado na própria linha.
+            original_results = {
+                int(r['id']): str(r['result'] or 'PENDENTE').upper()
+                for _, r in original_table[['id','result']].iterrows()
+            }
+            changed_results = []
+            for _, edited_row in edited_table[['id','result']].iterrows():
+                current_id = int(edited_row['id'])
+                new_result = str(edited_row['result'] or 'PENDENTE').upper()
+                if original_results.get(current_id) != new_result:
+                    update_result(current_id, new_result)
+                    telegram_note = ''
+                    if new_result != 'PENDENTE' and telegram_configured():
+                        try:
+                            dispatch_result(current_id)
+                            telegram_note = ' + Telegram'
+                        except Exception:
+                            telegram_note = ' (Telegram pendente)'
+                    changed_results.append(f'#{current_id}: {new_result}{telegram_note}')
+
+            if changed_results:
+                st.toast('✅ Resultado atualizado: ' + ', '.join(changed_results), icon='✅')
+                # Limpa o estado do editor para recarregar lucro/status já recalculados do banco.
+                st.session_state.pop('bets_result_editor', None)
                 st.rerun()
+
+            st.caption('💡 Para atualizar uma aposta, clique diretamente na coluna **result** da linha desejada.')
+            bet_id=st.selectbox('Aposta para editar/excluir',view['id'].tolist())
             row=df[df['id']==bet_id].iloc[0]
             with st.expander('✏️ Editar aposta selecionada'):
                 with st.form('edit_bet'):
