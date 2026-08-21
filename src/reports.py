@@ -57,6 +57,9 @@ def kpis(df: pd.DataFrame):
         'hit_rate': float((((settled['result'].eq('WIN')).astype(float) + 0.5*(settled['result'].eq('HALF WIN')).astype(float)).mean()*100) if len(settled) else 0),
         'avg_odds': float(settled['odds'].mean() if len(settled) else 0),
         'drawdown': max_drawdown_units(d),
+        'pending': int((d['result'] == 'PENDENTE').sum()),
+        'best_streak': streak_summary(d)['best_green'],
+        'worst_streak': streak_summary(d)['best_red'],
     }
 
 
@@ -152,3 +155,46 @@ def performance_alerts(df: pd.DataFrame, min_bets: int = 3) -> dict:
             result[bk] = rep.iloc[0].to_dict()
             result[wk] = rep.sort_values(['lucro_u','roi_%']).iloc[0].to_dict()
     return result
+
+
+def streak_summary(df: pd.DataFrame) -> dict:
+    """Resumo de sequências considerando resultados liquidados em ordem cronológica."""
+    d = prepare(df)
+    base = {'current_type':'—','current':0,'best_green':0,'best_red':0,'last10_profit':0.0,'last10_record':'—'}
+    if d.empty:
+        return base
+    settled = d[d['result'].isin(['WIN','HALF WIN','VOID','HALF LOSS','LOSS'])].copy()
+    if settled.empty:
+        return base
+    settled = settled.sort_values(['bet_date','id'])
+    # VOID quebra a sequência; HALF WIN/LOSS entram no respectivo lado.
+    seq=[]
+    for r in settled['result'].astype(str):
+        if r in ('WIN','HALF WIN'): seq.append('GREEN')
+        elif r in ('LOSS','HALF LOSS'): seq.append('RED')
+        else: seq.append('VOID')
+    best_g=best_r=cur=0; cur_type=None
+    run_type=None; run=0
+    for x in seq:
+        if x == 'VOID':
+            run_type=None; run=0
+            continue
+        if x == run_type: run += 1
+        else: run_type=x; run=1
+        if x == 'GREEN': best_g=max(best_g,run)
+        else: best_r=max(best_r,run)
+    for x in reversed(seq):
+        if x == 'VOID': break
+        if cur_type is None: cur_type=x; cur=1
+        elif x == cur_type: cur += 1
+        else: break
+    last=settled.tail(10)
+    g=sum(r in ('WIN','HALF WIN') for r in last['result'])
+    r=sum(r in ('LOSS','HALF LOSS') for r in last['result'])
+    v=sum(r == 'VOID' for r in last['result'])
+    return {
+        'current_type': cur_type or '—', 'current':cur,
+        'best_green':best_g, 'best_red':best_r,
+        'last10_profit':float(last['profit_units'].sum()),
+        'last10_record':f'{g}G • {r}R • {v}V'
+    }

@@ -25,7 +25,7 @@ from src.db import (
 )
 from src.parser import image_to_text, parse_text
 from src.api_football import api_enabled, enrich_from_api, suggest_settlement
-from src.reports import group_report, kpis, prepare, combo_report, performance_alerts
+from src.reports import group_report, kpis, prepare, combo_report, performance_alerts, streak_summary
 from src.telegram_dispatcher import configured as telegram_configured, dispatch_bet, dispatch_result, start_worker, extract_bet_link
 
 st.set_page_config(page_title='BetManager Cloud', page_icon='📊', layout='wide')
@@ -207,36 +207,48 @@ if page == 'Dashboard':
     if d.empty:
         st.info('Ainda não há apostas cadastradas.')
     else:
-        # Agenda + curva de lucro
-        st.markdown('<div class="bm-section-title">Hoje e próximos jogos</div>', unsafe_allow_html=True)
-        left, right = st.columns([1.15, 1.85], gap='large')
+        # Central do Dia + curva de lucro
+        st.markdown('<div class="bm-section-title">🔥 Central do Dia</div>', unsafe_allow_html=True)
+        left, right = st.columns([1.25, 1.75], gap='large')
 
         with left:
+            from zoneinfo import ZoneInfo
+            now_br = datetime.now(ZoneInfo('America/Sao_Paulo'))
+            today_br = now_br.date()
             pending = d[d['result'].eq('PENDENTE')].copy()
-            if not pending.empty:
-                pending['_date_dt'] = pd.to_datetime(pending['bet_date'], errors='coerce')
-                pending['_time'] = pending.get('game_time', '').apply(format_game_time_br) if 'game_time' in pending.columns else ''
-                pending = pending.sort_values(['_date_dt','_time','id']).head(7)
-                st.markdown('<div class="bm-panel-title">⏱ Próximas entradas</div>', unsafe_allow_html=True)
-                for _, row in pending.iterrows():
-                    dt_txt = ''
-                    try:
-                        dt_txt = pd.to_datetime(row.get('bet_date')).strftime('%d/%m')
-                    except Exception:
-                        dt_txt = str(row.get('bet_date',''))
+            pending['_date_dt'] = pd.to_datetime(pending['bet_date'], errors='coerce') if not pending.empty else pd.NaT
+            today_pending = pending[pending['_date_dt'].dt.date.eq(today_br)].copy() if not pending.empty else pending
+            if not today_pending.empty:
+                today_pending['_time'] = today_pending.get('game_time', '').apply(format_game_time_br) if 'game_time' in today_pending.columns else ''
+                today_pending = today_pending.sort_values(['_time','id'])
+                st.markdown(f'<div class="bm-panel-title">Hoje • {len(today_pending)} entrada(s) pendente(s)</div>', unsafe_allow_html=True)
+                for _, row in today_pending.iterrows():
                     tm = row.get('_time','') or '--:--'
-                    evt = str(row.get('event','—'))
-                    sel = str(row.get('selection','—'))
-                    usr = str(row.get('user_name',''))
+                    countdown = 'Horário pendente'
+                    if tm != '--:--':
+                        try:
+                            hh, mm = map(int, tm.split(':')[:2])
+                            game_dt = now_br.replace(hour=hh, minute=mm, second=0, microsecond=0)
+                            mins = int((game_dt-now_br).total_seconds()//60)
+                            countdown = f'Começa em {mins//60}h {mins%60:02d}min' if mins >= 60 else (f'Começa em {mins} min' if mins >= 0 else 'Jogo iniciado')
+                        except Exception: pass
+                    tg = '📨 Enviado' if int(row.get('telegram_sent') or 0) else '📭 Pendente'
+                    rem = '⏰ Enviado' if int(row.get('reminder_sent') or 0) == 1 else ('⏳ Agendado' if int(row.get('reminder_10m') or 0) else '—')
                     st.markdown(f"""
                     <div class="bm-next-card">
-                        <div class="bm-next-time">{dt_txt}<br><strong>{tm}</strong></div>
-                        <div class="bm-next-main"><strong>{evt}</strong><span>{sel} • {row.get('odds',0):.2f}</span></div>
-                        <div class="bm-next-user">{usr}</div>
+                        <div class="bm-next-time"><strong>{tm}</strong><br><span>{countdown}</span></div>
+                        <div class="bm-next-main"><strong>{row.get('event','—')}</strong><span>{row.get('selection','—')} • {float(row.get('odds') or 0):.2f} • {row.get('user_name','')}</span><span>{tg} &nbsp; {rem}</span></div>
                     </div>
                     """, unsafe_allow_html=True)
+                    link = str(row.get('bet_link') or row.get('notes') or '').strip()
+                    if link.startswith(('http://','https://')):
+                        st.link_button('Abrir aposta', link, use_container_width=True)
             else:
-                st.success('Nenhuma aposta pendente no momento.')
+                st.success('Nenhuma aposta pendente para hoje.')
+
+            future = pending[pending['_date_dt'].dt.date.gt(today_br)].copy() if not pending.empty else pending
+            if not future.empty:
+                st.caption(f'Próximos dias: {len(future)} aposta(s) pendente(s).')
 
         with right:
             st.markdown('<div class="bm-panel-title">📈 Evolução do lucro</div>', unsafe_allow_html=True)
@@ -244,18 +256,7 @@ if page == 'Dashboard':
                 settled['lucro_acumulado_u'] = settled['profit_units'].cumsum()
                 fig_profit = px.area(settled, x='bet_date', y='lucro_acumulado_u', markers=True)
                 fig_profit.update_traces(line=dict(width=3), marker=dict(size=7))
-                fig_profit.update_layout(
-                    height=330,
-                    margin=dict(l=8,r=8,t=15,b=8),
-                    xaxis_title=None,
-                    yaxis_title='Lucro acumulado (u)',
-                    hovermode='x unified',
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    showlegend=False,
-                    xaxis=dict(showgrid=False),
-                    yaxis=dict(gridcolor='rgba(255,255,255,.07)', zerolinecolor='rgba(255,255,255,.16)')
-                )
+                fig_profit.update_layout(height=330, margin=dict(l=8,r=8,t=15,b=8), xaxis_title=None, yaxis_title='Lucro acumulado (u)', hovermode='x unified', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False, xaxis=dict(showgrid=False), yaxis=dict(gridcolor='rgba(255,255,255,.07)', zerolinecolor='rgba(255,255,255,.16)'))
                 st.plotly_chart(fig_profit,use_container_width=True, config={'displayModeBar': False})
             else:
                 st.info('Sem apostas liquidadas para montar a curva de lucro.')
@@ -329,13 +330,22 @@ if page == 'Dashboard':
             if not insights:
                 st.caption('Os insights aparecerão conforme houver apostas liquidadas.')
 
+        st.markdown('<div class="bm-section-title">🔥 Sequências e momento</div>', unsafe_allow_html=True)
+        ss = streak_summary(df)
+        s1,s2,s3,s4 = st.columns(4)
+        current_icon = '🟢' if ss['current_type']=='GREEN' else ('🔴' if ss['current_type']=='RED' else '⚪')
+        s1.metric('Sequência atual', f"{current_icon} {ss['current']} {ss['current_type']}")
+        s2.metric('Melhor sequência GREEN', f"{ss['best_green']}")
+        s3.metric('Maior sequência RED', f"{ss['best_red']}")
+        s4.metric('Últimas 10', f"{ss['last10_profit']:+.2f}u", ss['last10_record'])
+
         if selected_view == 'TODOS':
             ur = group_report(df,'user_name')
             if not ur.empty:
-                st.markdown('<div class="bm-section-title">Ranking por apostador</div>', unsafe_allow_html=True)
-                rank = ur[['user_name','apostas','unidades','lucro_u','roi_%','odd_media']].rename(columns={
-                    'user_name':'Apostador','apostas':'Apostas','unidades':'Unidades','lucro_u':'Lucro (u)','roi_%':'ROI %','odd_media':'Odd média'
-                })
+                st.markdown('<div class="bm-section-title">🏆 Ranking dos Tipsters</div>', unsafe_allow_html=True)
+                rank = ur[['user_name','apostas','lucro_u','roi_%','acerto_%','odd_media']].copy()
+                rank.insert(0, 'Posição', range(1, len(rank)+1))
+                rank = rank.rename(columns={'user_name':'Tipster','apostas':'Apostas','lucro_u':'Lucro (u)','roi_%':'ROI %','acerto_%':'Acerto %','odd_media':'Odd média'})
                 st.dataframe(rank,hide_index=True,use_container_width=True)
 
 elif page == 'Importar aposta':
